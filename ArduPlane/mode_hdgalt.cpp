@@ -80,6 +80,21 @@ const AP_Param::GroupInfo ModeHdgAlt::var_info[] = {
     // @User: Standard
     AP_GROUPINFO("TURN_RATE", 8, ModeHdgAlt, turn_rate_default, 3.0),
 
+    // @Param: PILOT_THR
+    // @DisplayName: HDGALT pilot override threshold
+    // @Description: Stick deadband as a fraction of full travel. Any roll or pitch deflection beyond this, or a throttle position diverging from the TECS-commanded throttle by more than this, immediately disengages HDGALT. Rudder is not an override trigger.
+    // @Range: 0.02 0.5
+    // @Increment: 0.01
+    // @User: Standard
+    AP_GROUPINFO("PILOT_THR", 9, ModeHdgAlt, pilot_threshold, 0.10),
+
+    // @Param: DISENG
+    // @DisplayName: HDGALT disengage mode
+    // @Description: Flight mode number to switch to when the pilot overrides HDGALT (or it otherwise disengages). Default 5 = FBWA.
+    // @Values: 0:MANUAL,5:FBWA,6:FBWB,7:CRUISE
+    // @User: Standard
+    AP_GROUPINFO("DISENG", 10, ModeHdgAlt, disengage_mode, 5),
+
     // @Group: HD_
     // @Path: ../libraries/AC_PID/AC_PID.cpp
     AP_SUBGROUPINFO(heading_pid, "HD_", 4, ModeHdgAlt, AC_PID),
@@ -115,6 +130,7 @@ bool ModeHdgAlt::_enter()
     climb_fail_start_ms = 0;
     turn_derated = false;
     last_state_ms = 0;
+    have_throttle_ref = false;
 
     // initialise the shared target-altitude struct (slope offset,
     // terrain flags) consistently. HDGALT is barometric MSL only
@@ -240,8 +256,51 @@ float ModeHdgAlt::compute_bank_command_cd(float heading_error_rad, float dt)
     return constrain_float(bank_request_cd, -bank_limit_cd, bank_limit_cd);
 }
 
+// Pilot is supreme (design doc 3.5): any roll or pitch stick beyond
+// the deadband, or a throttle position diverging from the TECS
+// demand by more than the deadband, disengages HDGALT immediately
+// (no debounce) to HDGALT_DISENG. Rudder is deliberately NOT a
+// trigger. Gated on valid RC: with no RC link there is no pilot to
+// be supreme, and the throttle channel would read 0 and false-trip.
+bool ModeHdgAlt::check_pilot_override()
+{
+    if (!rc().has_valid_input()) {
+        return false;
+    }
+
+    const float thr_band = pilot_threshold;   // fraction of travel
+    const float roll_in  = fabsf(plane.channel_roll->norm_input());
+    const float pitch_in = fabsf(plane.channel_pitch->norm_input());
+
+    // Throttle: the lever is not spring-centred, so (unlike
+    // roll/pitch) an absolute comparison to the TECS demand would
+    // disengage the instant HDGALT engages unless the pilot had
+    // pre-set cruise throttle. Per design 3.5 the intent is to catch
+    // a *deliberate* push or pull, so trigger on movement from the
+    // throttle position captured at engage.
+    const float pilot_thr = plane.get_throttle_input(true);
+    if (!have_throttle_ref) {
+        throttle_ref_pct = pilot_thr;
+        have_throttle_ref = true;
+    }
+    const float thr_move = fabsf(pilot_thr - throttle_ref_pct) * 0.01f;
+
+    if (roll_in > thr_band || pitch_in > thr_band || thr_move > thr_band) {
+        gcs().send_text(MAV_SEVERITY_INFO, "HDGALT: pilot override");
+        plane.set_mode((uint8_t)disengage_mode.get(), ModeReason::RC_COMMAND);
+        return true;
+    }
+    return false;
+}
+
 void ModeHdgAlt::update()
 {
+    // Pilot supremacy is checked first, every tick, before any
+    // control work. If it disengaged, do nothing else this tick.
+    if (check_pilot_override()) {
+        return;
+    }
+
     const uint32_t now = AP_HAL::millis();
     float dt = (now - last_update_ms) * 0.001f;
     last_update_ms = now;

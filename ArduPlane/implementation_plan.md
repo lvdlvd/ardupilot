@@ -535,7 +535,31 @@ what the AP is doing.
 
 ## Step 8: Pilot override
 
-**Status: NOT STARTED.**
+**Status: DONE** — acceptance met and agreed (committed with this
+note). `check_pilot_override()` runs first in `update()`; any
+roll/pitch `norm_input` beyond `HDGALT_PILOT_THR`, or a throttle
+**movement from its engage-captured position** beyond the
+threshold, disengages immediately to `HDGALT_DISENG` (default
+FBWA) via `set_mode(..., RC_COMMAND)` with a STATUSTEXT. Rudder is
+not a trigger. Whole check gated on `rc().has_valid_input()`.
+New params `HDGALT_PILOT_THR` (0.10), `HDGALT_DISENG` (5).
+
+DEVIATION (design §3.5): the literal "throttle deviates from
+TECS-commanded" rule disengages the instant HDGALT engages (the
+throttle lever is not spring-centred and rarely matches TECS at
+engage — confirmed in SITL). Implemented the design *intent*
+("deliberate push or pull") as movement from the throttle position
+captured at engage. Design doc §3.5 updated; also fixed §4
+`HDGALT_DISENG` (the 18-char `HDGALT_DISENG_MODE` exceeds the
+AP_Param 16-char limit) and normalised all old param names in the
+doc.
+
+GAP: design §6.5 (disengage when airspeed < `HDGALT_ASPD_MIN`) is
+specified but is not a numbered plan step; raised with the user.
+
+SITL: no-RC → stays engaged; neutral override → no false trigger;
+roll nudge → disengaged to FBWA; re-engage works. Both
+`MODE_HDGALT_ENABLED` builds compile.
 
 Goal: detect any meaningful pilot stick input and disengage HDGALT,
 switching to FBWA (or `HDGALT_DISENGAGE_MODE`).

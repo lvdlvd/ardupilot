@@ -200,10 +200,10 @@ aggressiveness:
 
 - **Turn rate** ω_cmd: degrees per second. The AP turns at this
   rate (or less, if envelope-clipped) during heading capture.
-  Default is `HDGALT_TURN_RATE_DEFAULT`, typically 3.0°/s (rate 1).
+  Default is `HDGALT_TURN_RATE`, typically 3.0°/s (rate 1).
 - **Climb rate** ḣ_cmd: metres per second. The AP climbs or
   descends at this rate during altitude capture. Default is
-  `HDGALT_CLIMB_RATE_DEFAULT`, typically 2.0 m/s.
+  `HDGALT_CLIMB_RT`, typically 2.0 m/s.
 
 Each rate is either supplied by the FD per command, or inherited
 from the parameter default. The FD can omit either field; the AP
@@ -216,8 +216,8 @@ command), the AP snapshots the current state:
 
 - ψ_cmd ← current magnetic heading
 - h_cmd ← current barometric altitude
-- ω_cmd ← HDGALT_TURN_RATE_DEFAULT
-- ḣ_cmd ← HDGALT_CLIMB_RATE_DEFAULT
+- ω_cmd ← HDGALT_TURN_RATE
+- ḣ_cmd ← HDGALT_CLIMB_RT
 
 The mode then holds this state. If the FD sends a new HDGALT_COMMAND,
 the relevant setpoints update; otherwise the snapshot persists. This
@@ -245,7 +245,7 @@ The commanded bank angle is clipped by two limits:
 2. The dynamic **stall-margin** limit. Stall speed in a banked turn
    increases with load factor: V_s_turn = V_s × √(1/cos φ). The AP
    computes the bank angle at which V_s_turn would equal
-   V_current / HDGALT_STALL_MARGIN, and clips at that.
+   V_current / HDGALT_STALL_MGN, and clips at that.
 
 The actual bank command is `min(commanded, BANK_MAX, stall_margin_max)`.
 From the resulting bank angle and current airspeed, the AP computes
@@ -315,20 +315,33 @@ airframe is too slick to descend at the requested rate.
 ### 3.5 Pilot input handling
 
 Any pilot stick input beyond a deadband disengages HDGALT and
-switches the autopilot to `HDGALT_DISENGAGE_MODE` (default FBWA).
+switches the autopilot to `HDGALT_DISENG` (default FBWA).
 
-The deadband is `HDGALT_PILOT_THRESHOLD`, a fraction of stick
+The deadband is `HDGALT_PILOT_THR`, a fraction of stick
 travel, default 0.10.
 
-Triggers, applied each control loop tick:
+Triggers, applied each control loop tick (gated on
+`rc().has_valid_input()` — with no RC link there is no pilot to be
+supreme, and the throttle channel would read zero and false-trip):
 
 - **Roll stick** deflection from neutral exceeds threshold.
 - **Pitch stick** deflection from neutral exceeds threshold.
-- **Throttle stick** position deviates from TECS-commanded throttle
-  by more than the threshold. (Rationale: the pilot's hand may
-  rest on the throttle quadrant without moving it, but a deliberate
-  push or pull causes the position to diverge from what TECS is
-  asking for, which triggers the disengage.)
+- **Throttle stick** moves more than the threshold from its
+  position **captured at engagement**.
+
+  Implementation note (deviation from earlier text): the original
+  rule was "throttle position deviates from the TECS-commanded
+  throttle". Roll and pitch are spring-centred so an absolute
+  deadband around neutral is correct, but the throttle lever is
+  **not** self-centring — comparing its absolute position to the
+  TECS demand disengages the instant HDGALT engages unless the
+  pilot happened to pre-set cruise throttle (confirmed in SITL).
+  The design *intent* (§ rationale: "a deliberate push or pull")
+  is preserved by triggering on throttle **movement from the
+  position captured when override monitoring first sees valid RC
+  after engage**. A hand resting on the lever does not trip; a
+  deliberate push/pull does. Re-engagement re-captures the
+  reference.
 
 Yaw (rudder) stick is **not** a disengage trigger. Rudder passes
 through as in FBWA (yaw damper active, rudder input augments).
@@ -362,7 +375,7 @@ name; the abbreviated ones are marked.
 | `HDGALT_ASPD_MIN` *(was AIRSPEED_MIN)*        | m/s   | (airframe-specific) | Protective airspeed floor / disengage threshold |
 | `HDGALT_CLIMB_FT` *(was CLIMB_FAIL_TIMEOUT)*  | s     | 10    | Time before latching climb-unachievable failsafe |
 | `HDGALT_PILOT_THR` *(was PILOT_THRESHOLD)*    | ratio | 0.10  | Stick deadband; above this, disengage            |
-| `HDGALT_DISENG_MODE` *(was DISENGAGE_MODE)*   | mode  | FBWA  | Where to go on disengage                         |
+| `HDGALT_DISENG` *(was DISENGAGE_MODE)*        | mode  | 5=FBWA | Where to go on disengage                         |
 | `HDGALT_HD_*`               | —     | see below           | Heading→bank `AC_PID` gains (P/I/D/FF/IMAX/FLT…) |
 
 The `HDGALT_HD_` group is the heading-hold controller's `AC_PID`,
@@ -374,7 +387,7 @@ proven GUIDED heading-hold controller (`g2.guidedHeading`):
 Names marked *(was …)* are abbreviations of earlier-draft names
 forced by the 16-character limit; the abbreviated names land with
 their owning implementation step (TURN_RATE/CLIMB_RT/CLIMB_FT in
-steps 4–6, PILOT_THR/DISENG_MODE in step 8). Only `HDGALT_BANK_MAX`,
+steps 4–6, PILOT_THR/DISENG in step 8). Only `HDGALT_BANK_MAX`,
 `HDGALT_STALL_MGN`, `HDGALT_ASPD_MIN` and `HDGALT_HD_*` exist as of
 step 3.
 
@@ -551,11 +564,11 @@ step 5 leaves a documented hook).
 
 ### 6.5 Airspeed below minimum
 
-If indicated airspeed drops below `HDGALT_AIRSPEED_MIN` for more
+If indicated airspeed drops below `HDGALT_ASPD_MIN` for more
 than a short debounce (1 second), the AP disengages immediately.
 A STATUSTEXT is emitted: "HDGALT: airspeed below minimum, disengaging."
 
-The disengage target is `HDGALT_DISENGAGE_MODE`. The pilot or FD
+The disengage target is `HDGALT_DISENG`. The pilot or FD
 must reassess the situation before re-engaging.
 
 ### 6.6 Pilot stick override

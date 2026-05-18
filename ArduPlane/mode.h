@@ -1095,6 +1095,8 @@ public:
     AP_Float pitch_max_deg;     // HDGALT_PITCH_MAX
     AP_Float climb_fail_timeout;// HDGALT_CLIMB_FT
     AP_Float turn_rate_default; // HDGALT_TURN_RATE
+    AP_Float pilot_threshold;   // HDGALT_PILOT_THR (fraction of travel)
+    AP_Int8  disengage_mode;    // HDGALT_DISENG (mode number, dflt FBWA)
 
     // heading -> bank outer loop. Modelled on plane's existing
     // GUIDED heading-hold (g2.guidedHeading): error in radians,
@@ -1164,12 +1166,25 @@ private:
     // HDGALT_STATE emission rate limiting
     uint32_t last_state_ms;
 
+    // pilot throttle position captured when override monitoring
+    // first sees valid RC after engage; the throttle trigger is a
+    // deliberate *movement* from this, not divergence from TECS
+    // (the lever is not spring-centred). See design doc 3.5.
+    float throttle_ref_pct;
+    bool  have_throttle_ref;
+
     // dt bookkeeping for the heading PID
     uint32_t last_update_ms;
 
     // commanded bank (centidegrees) after PID, static bank limit and
     // dynamic stall-margin limit (design doc sections 3.3 / 8.3)
     float compute_bank_command_cd(float heading_error_rad, float dt);
+
+    // pilot stick override (design doc 3.5): any roll/pitch beyond
+    // the deadband, or throttle diverging from the TECS demand,
+    // disengages immediately to HDGALT_DISENG. Returns true if it
+    // disengaged (caller must return without further control).
+    bool check_pilot_override();
 };
 #endif // MODE_HDGALT_ENABLED
 
