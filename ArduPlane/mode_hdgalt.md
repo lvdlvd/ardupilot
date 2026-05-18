@@ -345,8 +345,24 @@ drops below this, the AP disengages with a STATUSTEXT warning.
 
 ## 5. MAVLink interface
 
-Two new messages, in a new dialect file (or proposed for upstream
-common.xml after stabilization).
+Two new messages, defined in the ArduPilot dialect
+`modules/mavlink/message_definitions/v1.0/ardupilotmega.xml`
+(proposed for upstream common.xml after stabilization).
+
+As implemented:
+
+- `HDGALT_COMMAND` is message ID **11061**.
+- `HDGALT_STATE` is message ID **11062**.
+- `PLANE_MODE_HDGALT = 27` is added to the `PLANE_MODE` enum (the
+  next free value after `PLANE_MODE_AUTOLAND = 26`); this matches
+  `Mode::Number::HDGALT` on the ArduPlane side.
+- The `flags`, `warnings`, and `capture_state` fields are backed by
+  the `HDGALT_COMMAND_FLAGS`, `HDGALT_STATE_FLAGS`,
+  `HDGALT_WARNING`, and `HDGALT_CAPTURE_STATE` enums.
+
+Note: mavgen reorders struct/wire fields by descending type size;
+the field lists below are the logical contract, not the wire
+layout.
 
 ### 5.1 HDGALT_COMMAND (FD → AP)
 
