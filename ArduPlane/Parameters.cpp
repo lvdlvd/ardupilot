@@ -965,6 +965,12 @@ const AP_Param::Info Plane::var_info[] = {
     GOBJECT(mode_autoland, "AUTOLAND_", ModeAutoLand),
 #endif
 
+#if MODE_HDGALT_ENABLED
+    // @Group: HDGALT_
+    // @Path: mode_hdgalt.cpp
+    GOBJECT(mode_hdgalt, "HDGALT_", ModeHdgAlt),
+#endif
+
 #if AP_PLANE_GLIDER_PULLUP_ENABLED
     // @Group: PUP_
     // @Path: pullup.cpp

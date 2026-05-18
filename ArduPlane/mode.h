@@ -9,6 +9,7 @@
 #include "quadplane.h"
 #include <AP_AHRS/AP_AHRS.h>
 #include <AP_Mission/AP_Mission.h>
+#include <AC_PID/AC_PID.h>
 #include "config.h"
 #include "pullup.h"
 #include "systemid.h"
@@ -19,6 +20,10 @@
 
 #ifndef MODE_AUTOLAND_ENABLED
 #define MODE_AUTOLAND_ENABLED 1
+#endif
+
+#ifndef MODE_HDGALT_ENABLED
+#define MODE_HDGALT_ENABLED 1
 #endif
 
 #include <AP_Quicktune/AP_Quicktune.h>
@@ -70,7 +75,9 @@ public:
 #if MODE_AUTOLAND_ENABLED
         AUTOLAND      = 26,
 #endif
+#if MODE_HDGALT_ENABLED
         HDGALT        = 27,
+#endif
 
     // Mode number 30 reserved for "offboard" for external/lua control.
     };
@@ -1040,13 +1047,14 @@ protected:
 };
 #endif
 
+#if MODE_HDGALT_ENABLED
 // HDGALT: GA-style two-axis (heading + altitude) autopilot mode
 // driven by an external flight director over MAVLink. See
-// ArduPlane/mode_hdgalt.md for the design specification. This stub
-// is inert; control logic is added in later implementation steps.
+// ArduPlane/mode_hdgalt.md for the design specification.
 class ModeHdgAlt : public Mode
 {
 public:
+    ModeHdgAlt();
 
     Number mode_number() const override { return Number::HDGALT; }
     const char *name() const override { return "HDGALT"; }
@@ -1054,6 +1062,26 @@ public:
 
     // methods that affect movement of the vehicle in this mode
     void update() override;
+
+    // vertical is handled via TECS (placeholder in step 3, explicit
+    // altitude target in step 4); let the auto-throttle path run.
+    bool does_auto_throttle() const override { return true; }
+
+    // HDGALT manages its own altitude target; suppress the generic
+    // nav-driven target-altitude profile (same as CRUISE).
+    void update_target_altitude() override {};
+
+    // parameter group (registered as "HDGALT_" in Parameters.cpp)
+    static const struct AP_Param::GroupInfo var_info[];
+
+    AP_Float bank_max_deg;      // HDGALT_BANK_MAX
+    AP_Float stall_margin;      // HDGALT_STALL_MGN
+    AP_Float airspeed_min;      // HDGALT_ASPD_MIN
+
+    // heading -> bank outer loop. Modelled on plane's existing
+    // GUIDED heading-hold (g2.guidedHeading): error in radians,
+    // output in centidegrees of bank.
+    AC_PID heading_pid{5000.0, 0.0, 0.0, 0.0, 10.0, 5.0, 5.0, 5.0, 0.0};
 
 protected:
 
@@ -1064,7 +1092,20 @@ protected:
     // This is the ArduPlane idiom for the design doc's
     // "allows_arming() = false".
     bool _pre_arm_checks(size_t buflen, char *buffer) const override { return false; }
+
+private:
+
+    // commanded magnetic heading setpoint, snapshotted on _enter()
+    float heading_cmd_deg;
+
+    // dt bookkeeping for the heading PID
+    uint32_t last_update_ms;
+
+    // commanded bank (centidegrees) after PID, static bank limit and
+    // dynamic stall-margin limit (design doc sections 3.3 / 8.3)
+    float compute_bank_command_cd(float heading_error_rad, float dt);
 };
+#endif // MODE_HDGALT_ENABLED
 
 #if HAL_SOARING_ENABLED
 

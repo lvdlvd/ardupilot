@@ -325,21 +325,45 @@ Re-engagement is the standard mode switch path: there is no special
 
 All parameters live under the `HDGALT_` prefix.
 
-| Parameter                   | Units | Default             | Purpose                                          |
+All parameters use the `HDGALT_` prefix and are registered the
+ArduPlane way: a `GOBJECT(mode_hdgalt, "HDGALT_", ModeHdgAlt)` in
+`Parameters.cpp` plus a `ModeHdgAlt::var_info[]` table (the same
+pattern `ModeTakeoff`/`TKOFF_` uses).
+
+ArduPlane parameter names are limited to 16 characters including the
+prefix, so several design names from earlier drafts are abbreviated
+in the implementation. The table below gives the **implemented**
+name; the abbreviated ones are marked.
+
+| Parameter (implemented)     | Units | Default             | Purpose                                          |
 | --------------------------- | ----- | ------------------- | ------------------------------------------------ |
 | `HDGALT_BANK_MAX`           | deg   | 25                  | Hard upper bank angle limit                      |
 | `HDGALT_PITCH_MAX`          | deg   | 10                  | Hard upper pitch angle limit (TECS-side)         |
-| `HDGALT_TURN_RATE_DEFAULT`  | deg/s | 3.0                 | Default turn rate; FD may override per command   |
-| `HDGALT_CLIMB_RATE_DEFAULT` | m/s   | 2.0                 | Default climb rate; FD may override per command  |
-| `HDGALT_STALL_MARGIN`       | ratio | 1.3                 | Min airspeed / stall airspeed in turns           |
-| `HDGALT_AIRSPEED_MIN`       | m/s   | (airframe-specific) | Disengage threshold; protective floor            |
-| `HDGALT_CLIMB_FAIL_TIMEOUT` | s     | 10                  | Time before latching climb-unachievable failsafe |
-| `HDGALT_PILOT_THRESHOLD`    | ratio | 0.10                | Stick deadband; above this, disengage            |
-| `HDGALT_DISENGAGE_MODE`     | mode  | FBWA                | Where to go on disengage                         |
+| `HDGALT_TURN_RATE` *(was TURN_RATE_DEFAULT)*  | deg/s | 3.0   | Default turn rate; FD may override per command   |
+| `HDGALT_CLIMB_RT` *(was CLIMB_RATE_DEFAULT)*  | m/s   | 2.0   | Default climb rate; FD may override per command  |
+| `HDGALT_STALL_MGN` *(was STALL_MARGIN)*       | ratio | 1.3   | Min airspeed / stall airspeed in turns           |
+| `HDGALT_ASPD_MIN` *(was AIRSPEED_MIN)*        | m/s   | (airframe-specific) | Protective airspeed floor / disengage threshold |
+| `HDGALT_CLIMB_FT` *(was CLIMB_FAIL_TIMEOUT)*  | s     | 10    | Time before latching climb-unachievable failsafe |
+| `HDGALT_PILOT_THR` *(was PILOT_THRESHOLD)*    | ratio | 0.10  | Stick deadband; above this, disengage            |
+| `HDGALT_DISENG_MODE` *(was DISENGAGE_MODE)*   | mode  | FBWA  | Where to go on disengage                         |
+| `HDGALT_HD_*`               | —     | see below           | Heading→bank `AC_PID` gains (P/I/D/FF/IMAX/FLT…) |
+
+The `HDGALT_HD_` group is the heading-hold controller's `AC_PID`,
+exposed as an `AP_SUBGROUPINFO` (so `HDGALT_HD_P`, `HDGALT_HD_I`,
+…). Its starting gains are copied from ArduPlane's existing,
+proven GUIDED heading-hold controller (`g2.guidedHeading`):
+`{P=5000, I=0, D=0, FF=0, IMAX=10, FLTT=5, FLTE=5, FLTD=5}`.
+
+Names marked *(was …)* are abbreviations of earlier-draft names
+forced by the 16-character limit; the abbreviated names land with
+their owning implementation step (TURN_RATE/CLIMB_RT/CLIMB_FT in
+steps 4–6, PILOT_THR/DISENG_MODE in step 8). Only `HDGALT_BANK_MAX`,
+`HDGALT_STALL_MGN`, `HDGALT_ASPD_MIN` and `HDGALT_HD_*` exist as of
+step 3.
 
 Default values are starting points. Each is tunable.
 
-`HDGALT_AIRSPEED_MIN` is airframe-specific (typically ~1.3 × V_s).
+`HDGALT_ASPD_MIN` is airframe-specific (typically ~1.3 × V_s).
 It is the airspeed below which HDGALT will not operate: if airspeed
 drops below this, the AP disengages with a STATUSTEXT warning.
 
@@ -556,16 +580,35 @@ A new file `ArduPlane/mode_hdgalt.cpp` with corresponding header
 declaration. The class follows the `Mode` base interface used by
 all ArduPlane modes.
 
+The whole mode (enum value, class, `.cpp` body, `Plane` member and
+`friend`, factory case, `GOBJECT`, and the `mode_number()` switch
+cases) is wrapped in `#if MODE_HDGALT_ENABLED`, defined in
+`mode.h` defaulting to `1`, with a `Feature` row in
+`Tools/scripts/build_options.py` — the same feature-gate convention
+`MODE_AUTOLAND_ENABLED` uses, so the mode can be compiled out on
+flash-constrained boards.
+
 ```cpp
+#if MODE_HDGALT_ENABLED
 class ModeHdgAlt : public Mode {
 public:
+    ModeHdgAlt();
     Number mode_number() const override { return Number::HDGALT; }
     const char *name() const override { return "HDGALT"; }
     const char *name4() const override { return "HDGA"; }
 
     void update() override;
+    bool does_auto_throttle() const override { return true; }
+    void update_target_altitude() override {};   // we manage it
 
     void handle_HDGALT_COMMAND(const mavlink_message_t &msg);
+
+    static const struct AP_Param::GroupInfo var_info[];
+    AP_Float bank_max_deg;   // HDGALT_BANK_MAX
+    AP_Float stall_margin;   // HDGALT_STALL_MGN
+    AP_Float airspeed_min;   // HDGALT_ASPD_MIN
+    // heading->bank, mirrors g2.guidedHeading (AC_PID)
+    AC_PID heading_pid{5000.0, 0.0, 0.0, 0.0, 10.0, 5.0, 5.0, 5.0, 0.0};
 
 protected:
     bool _enter() override;
@@ -577,23 +620,28 @@ protected:
 private:
     // setpoints
     float heading_cmd_deg;
-    float altitude_cmd_m;
-    float turn_rate_cmd_dps;
-    float climb_rate_cmd_mps;
+    float altitude_cmd_m;       // step 4
+    float turn_rate_cmd_dps;    // step 6
+    float climb_rate_cmd_mps;   // step 4/6
+    uint32_t last_update_ms;
 
-    // pending future command
+    // pending future command (step 6)
     uint32_t pending_start_time_ms;
     bool pending_command_valid;
     // ... pending values
 
-    // PID state for lateral
-    PID heading_pid;
-
-    // failsafe state
+    // failsafe state (step 5)
     bool climb_failed_latched;
     uint32_t climb_fail_start_ms;
+
+    float compute_bank_command_cd(float heading_error_rad, float dt);
 };
+#endif // MODE_HDGALT_ENABLED
 ```
+
+`Plane` must also declare `friend class ModeHdgAlt;` (ArduPlane
+gates access to protected members such as `ahrs` per-mode via
+explicit friend declarations).
 
 ArduPlane note (differs from Copter): ArduPlane's `Mode` base has
 **no** `requires_GPS()` or `allows_arming()` virtuals. The design
@@ -643,34 +691,48 @@ yaw damper active.
 
 ### 8.3 The lateral PID outer loop
 
-The heading PID is a new piece of code, but small:
+The heading→bank controller is **not** a hand-rolled PID and not
+the legacy `libraries/PID` class (unused in modern ArduPlane).
+ArduPlane already ships a proven heading→bank controller — the
+GUIDED mode's `g2.guidedHeading` (`AC_PID`, error in **radians**,
+output in **centidegrees** of bank). HDGALT mirrors it exactly:
 
 ```cpp
-float ModeHdgAlt::compute_bank_command(float heading_error_deg) {
-    // heading_error wrapped to [-180, 180]
-    float bank_request = heading_pid.update(heading_error_deg);
+// member, defaults copied from g2.guidedHeading
+AC_PID heading_pid{5000.0, 0.0, 0.0, 0.0, 10.0, 5.0, 5.0, 5.0, 0.0};
 
-    // Static bank limit
-    float bank_max = HDGALT_BANK_MAX;
+// per tick, in centidegrees:
+float ModeHdgAlt::compute_bank_command_cd(float err_rad, float dt) {
+    const float bank_request_cd = heading_pid.update_error(err_rad, dt);
 
-    // Dynamic stall-margin limit
-    float airspeed = ahrs.airspeed();
-    float stall_margin = HDGALT_STALL_MARGIN;
-    // V_s_turn = V_s * sqrt(1/cos(phi))
-    // require V_current >= V_s_turn * stall_margin
-    // → cos(phi) >= (V_s * stall_margin / V_current)^2
-    float ratio = HDGALT_AIRSPEED_MIN * stall_margin / airspeed;
-    float bank_stall_max;
-    if (ratio >= 1.0f) {
-        bank_stall_max = 0;  // can't bank at all
-    } else {
-        bank_stall_max = degrees(acos(sq(ratio)));
+    float bank_limit_deg = bank_max_deg;            // HDGALT_BANK_MAX
+
+    // Dynamic stall-margin limit (design §3.3):
+    // require V >= V_s_turn * margin, V_s_turn = V_s / sqrt(cos phi)
+    // => cos(phi) >= (airspeed_min * stall_margin / V)^2
+    const float airspeed = plane.smoothed_airspeed;
+    if (is_positive(airspeed)) {
+        const float ratio = (airspeed_min * stall_margin) / airspeed;
+        const float bank_stall_max_deg =
+            (ratio >= 1.0f) ? 0.0f : degrees(acosf(sq(ratio)));
+        bank_limit_deg = MIN(bank_limit_deg, bank_stall_max_deg);
     }
-    float bank_limit = MIN(bank_max, bank_stall_max);
+    // never exceed the airframe roll limit either
+    const float bank_limit_cd =
+        MIN(bank_limit_deg * 100.0f, (float)plane.roll_limit_cd);
 
-    return constrain_float(bank_request, -bank_limit, +bank_limit);
+    return constrain_float(bank_request_cd, -bank_limit_cd, bank_limit_cd);
 }
 ```
+
+The heading error is `wrap_PI(radians(heading_cmd_deg) -
+ahrs.get_yaw_rad())`. Note `ahrs.get_yaw_rad()` is earth-frame
+(true) yaw, not magnetic; for heading *hold* this is correct
+because the engagement snapshot and the running error use the same
+reference, so declination cancels. The true-vs-magnetic distinction
+only matters for the FD-facing values in `HDGALT_STATE` and is
+addressed there (step 7). Airspeed comes from `plane.smoothed_airspeed`
+(the same source the existing stall-protection code uses).
 
 Total new code is on the order of 100–200 lines. Most of the mode
 is parameter-handling, message-parsing, and state machine

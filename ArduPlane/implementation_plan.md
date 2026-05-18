@@ -161,7 +161,19 @@ Do not implement any control logic. The mode is intentionally inert.
 
 ## Step 3: Lateral controller — heading hold
 
-**Status: NOT STARTED.**
+**Status: DONE** — acceptance met and agreed (committed with this
+note). Heading→bank uses `AC_PID` mirroring `g2.guidedHeading`
+(design doc §8.1/§8.3 updated; the legacy `PID` class is unused in
+modern Plane). Params: `HDGALT_BANK_MAX`, `HDGALT_STALL_MGN`,
+`HDGALT_ASPD_MIN`, `HDGALT_HD_*` (names abbreviated for the
+AP_Param 16-char limit; §4 updated). Added `friend class
+ModeHdgAlt;` to `Plane`. Vertical is the CRUISE-style placeholder
+(`set_target_altitude_current` + `update_fbwb_speed_height`),
+replaced in step 4. The entire mode is now feature-gated behind
+`MODE_HDGALT_ENABLED` (default 1) with a `build_options.py` entry;
+both the enabled and `--define MODE_HDGALT_ENABLED=0` builds
+compile. SITL: engaged at ~90 m, heading held within ~4° over 30 s,
+bank within `HDGALT_BANK_MAX`.
 
 Goal: a working heading PID + bank limit + stall-margin clip, such
 that engaging HDGALT in SITL holds the heading at engagement.
@@ -592,6 +604,22 @@ project. Build it once HDGALT is merged or at least stable.
   implementation (a parameter name, a default value, a control flow
   detail), update `mode_hdgalt.md` in the same commit. The doc and
   the code must agree at every commit.
+- **Maintain the `MODE_HDGALT_ENABLED` guard (since step 3).** The
+  whole mode is feature-gated behind `MODE_HDGALT_ENABLED`
+  (`mode.h`, default 1; `build_options.py` has the `Feature` row).
+  Every step that adds HDGALT code MUST wrap it in
+  `#if MODE_HDGALT_ENABLED`: new `mode_hdgalt.*` bodies, any new
+  `Plane`/factory/`GOBJECT` lines, and especially any new
+  `Mode::Number::HDGALT` `case` labels (e.g. the MAVLink command
+  routing in step 6) — an unguarded `case` breaks the
+  `--define MODE_HDGALT_ENABLED=0` build. Verify each step builds
+  both with the macro at its default and with
+  `./waf configure --board sitl --define MODE_HDGALT_ENABLED=0`.
+- **AP_Param names are limited to 16 chars including the `HDGALT_`
+  prefix.** Several design-doc names are abbreviated (see §4 table:
+  `STALL_MGN`, `ASPD_MIN`, `CLIMB_RT`, `CLIMB_FT`, `PILOT_THR`,
+  `DISENG_MODE`, …). Use the abbreviated name and keep the §4 table
+  in sync as each owning step lands.
 - **Don't over-engineer.** The design doc is deliberately minimal.
   If a piece of code doesn't have a corresponding design-doc
   justification, question whether it should exist. Resist the urge
