@@ -1,3 +1,7 @@
+# HDGALT Mode Design Proposal
+
+**Status:** Design draft. Implementation in progress on branch `hdgaltmode`.
+
 # HDGALT — A GA-Style Two-Axis Autopilot Mode for ArduPlane
 
 A new ArduPlane flight mode providing the general-aviation
