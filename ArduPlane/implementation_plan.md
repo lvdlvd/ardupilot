@@ -32,6 +32,12 @@ not the spec.
 
 ## Step 1: Define the MAVLink messages
 
+**Status: DONE** — acceptance met and agreed. Submodule
+`modules/mavlink@hdgaltmode` commit `2f5675fa`; parent commit
+`7412a4a66a`. `HDGALT_COMMAND` = id 11061, `HDGALT_STATE` = id
+11062, `PLANE_MODE_HDGALT` = 27, supporting enums added; `./waf
+plane` builds and generates the headers.
+
 Goal: nail down `HDGALT_COMMAND` and `HDGALT_STATE` as concrete
 MAVLink message definitions. Nothing else in the implementation can
 proceed without this contract.
@@ -83,6 +89,17 @@ step 6. This step is XML-only.
 ---
 
 ## Step 2: Stub mode in ArduPlane
+
+**Status: DONE** — acceptance met and agreed (committed together
+with this status note). `Mode::Number::HDGALT = 27`, inert
+`ModeHdgAlt` class, factory + `Plane` member registered. SITL:
+mode switches to HDGALT (HEARTBEAT `custom_mode = 27`), arming
+refused ("HDGALT mode not armable"). Plan/design-doc deviations
+recorded in design doc section 8.1: ArduPlane has no
+`requires_GPS()`/`allows_arming()` virtuals — arming-disable is
+done via `_pre_arm_checks() == false`; no `wscript` edit needed
+(glob build); `-Wswitch` cases added in `GCS_Plane.cpp`,
+`GCS_MAVLink_Plane.cpp`, `events.cpp`.
 
 Goal: a new `HDGALT` mode that can be selected via the mode switch
 in SITL, that does nothing yet but compiles and runs.
@@ -143,6 +160,8 @@ Do not implement any control logic. The mode is intentionally inert.
 ---
 
 ## Step 3: Lateral controller — heading hold
+
+**Status: NOT STARTED.**
 
 Goal: a working heading PID + bank limit + stall-margin clip, such
 that engaging HDGALT in SITL holds the heading at engagement.
@@ -223,6 +242,8 @@ snapshotted at engagement. Step 6 adds command handling.
 
 ## Step 4: Vertical passthrough to TECS
 
+**Status: NOT STARTED.**
+
 Goal: pass HDGALT's altitude setpoint to TECS so the plane holds
 altitude as well as heading.
 
@@ -273,6 +294,8 @@ altitude as well as heading.
 ---
 
 ## Step 5: Climb-failure detection
+
+**Status: NOT STARTED.**
 
 Goal: detect when TECS can't reach the commanded altitude and latch
 the failsafe.
@@ -337,6 +360,8 @@ the failsafe.
 
 ## Step 6: MAVLink command handling
 
+**Status: NOT STARTED.**
+
 Goal: process incoming `HDGALT_COMMAND` messages, update setpoints,
 handle the single-slot future queue.
 
@@ -397,6 +422,8 @@ handle the single-slot future queue.
 
 ## Step 7: HDGALT_STATE emission
 
+**Status: NOT STARTED.**
+
 Goal: periodically emit `HDGALT_STATE` so the FD (or a GCS) can see
 what the AP is doing.
 
@@ -435,6 +462,8 @@ what the AP is doing.
 ---
 
 ## Step 8: Pilot override
+
+**Status: NOT STARTED.**
 
 Goal: detect any meaningful pilot stick input and disengage HDGALT,
 switching to FBWA (or `HDGALT_DISENGAGE_MODE`).
@@ -489,6 +518,8 @@ switching to FBWA (or `HDGALT_DISENGAGE_MODE`).
 ---
 
 ## Step 9: Integration test in `Tools/autotest/`
+
+**Status: NOT STARTED.**
 
 Goal: an automated test that verifies HDGALT works end-to-end, run
 as part of ArduPilot's standard test suite.

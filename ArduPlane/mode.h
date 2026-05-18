@@ -70,6 +70,7 @@ public:
 #if MODE_AUTOLAND_ENABLED
         AUTOLAND      = 26,
 #endif
+        HDGALT        = 27,
 
     // Mode number 30 reserved for "offboard" for external/lua control.
     };
@@ -1038,6 +1039,33 @@ protected:
     void set_autoland_direction(const float heading);
 };
 #endif
+
+// HDGALT: GA-style two-axis (heading + altitude) autopilot mode
+// driven by an external flight director over MAVLink. See
+// ArduPlane/mode_hdgalt.md for the design specification. This stub
+// is inert; control logic is added in later implementation steps.
+class ModeHdgAlt : public Mode
+{
+public:
+
+    Number mode_number() const override { return Number::HDGALT; }
+    const char *name() const override { return "HDGALT"; }
+    const char *name4() const override { return "HDGA"; }
+
+    // methods that affect movement of the vehicle in this mode
+    void update() override;
+
+protected:
+
+    bool _enter() override;
+    void _exit() override;
+
+    // HDGALT is an in-air mode; arming directly in it is not allowed.
+    // This is the ArduPlane idiom for the design doc's
+    // "allows_arming() = false".
+    bool _pre_arm_checks(size_t buflen, char *buffer) const override { return false; }
+};
+
 #if HAL_SOARING_ENABLED
 
 class ModeThermal: public Mode

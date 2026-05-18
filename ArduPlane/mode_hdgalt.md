@@ -563,15 +563,16 @@ public:
     const char *name() const override { return "HDGALT"; }
     const char *name4() const override { return "HDGA"; }
 
-    bool requires_GPS() const override { return false; }
-    bool allows_arming() const override { return false; }
-    bool is_landing() const override { return false; }
-
-    bool _enter() override;
-    void _exit() override;
     void update() override;
 
     void handle_HDGALT_COMMAND(const mavlink_message_t &msg);
+
+protected:
+    bool _enter() override;
+    void _exit() override;
+
+    // HDGALT is an in-air mode; arming directly in it is refused.
+    bool _pre_arm_checks(size_t buflen, char *buffer) const override { return false; }
 
 private:
     // setpoints
@@ -594,9 +595,31 @@ private:
 };
 ```
 
-`requires_GPS() = false` and `allows_arming() = false` advertise
-that the mode does not require position and is not an arming-from
-mode. ArduPlane's prearm and mode-switch logic respect these.
+ArduPlane note (differs from Copter): ArduPlane's `Mode` base has
+**no** `requires_GPS()` or `allows_arming()` virtuals. The design
+intent maps to ArduPlane idioms as follows:
+
+- *"not an arming-from mode"*: override `_pre_arm_checks()` to
+  return `false`. ArduPlane's prearm path
+  (`AP_Arming_Plane` → `Mode::pre_arm_checks`) then refuses arming
+  in this mode with the message `"<MODE> mode not armable"`. Several
+  existing modes (e.g. TAKEOFF, AUTOLAND) use this same idiom.
+- *"does not require position"*: nothing to declare. ArduPlane modes
+  simply do not consult GPS unless they need it; HDGALT never reads
+  position (see sections 1.3 and 2.2), so `requires_GPS()` has no
+  ArduPlane analogue and is not needed.
+- `is_landing()` is not overridden: the `Mode` base default is
+  already `false`, and only landing modes override it.
+
+The mode is registered the usual ArduPlane way: a `Mode::Number`
+enum value (`HDGALT = 27`), a `ModeHdgAlt` member on `Plane`, a
+case in `Plane::mode_from_mode_num()`, and `case`s added to the
+`mode_number()` switch statements in `GCS_Plane.cpp`,
+`GCS_MAVLink_Plane.cpp` and `events.cpp` (ArduPlane builds these
+`-Wswitch -Werror`). No build-manifest edit is needed: ArduPlane's
+`wscript` globs its sources. In `GCS_Plane.cpp` HDGALT advertises
+yaw and Z-altitude sensor control but **not** XY-position control,
+consistent with its no-position-awareness design.
 
 ### 8.2 Reused controllers
 

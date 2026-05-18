@@ -328,6 +328,7 @@ private:
 #if MODE_AUTOLAND_ENABLED
     ModeAutoLand mode_autoland;
 #endif
+    ModeHdgAlt mode_hdgalt;
 #if HAL_SOARING_ENABLED
     ModeThermal mode_thermal;
 #endif
