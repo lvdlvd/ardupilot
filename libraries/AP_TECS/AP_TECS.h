@@ -113,6 +113,14 @@ public:
         return _hgt_rate_dem;
     }
 
+    // true if the commanded height demand is currently being frozen
+    // because the aircraft cannot follow the demanded climb or
+    // descent (pitch or throttle saturated against its limit). Lets
+    // an outer loop detect an unachievable altitude target.
+    bool height_demand_limited(void) const {
+        return _hgt_dem_limited;
+    }
+
     // set path_proportion
     void set_path_proportion(float path_proportion) {
         _path_proportion = constrain_float(path_proportion, 0.0f, 1.0f);
@@ -294,6 +302,7 @@ private:
     float _hgt_dem_in_raw;      // height demand input from autopilot before any modification (m)
     float _hgt_dem_in;          // height demand input from autopilot after unachievable climb or descent limiting (m)
     float _hgt_dem_in_prev;     // previous value of _hgt_dem_in (m)
+    bool _hgt_dem_limited;      // true if the height demand was frozen because the aircraft cannot follow the demanded climb or descent
     float _hgt_dem_lpf;         // height demand after application of low pass filtering (m)
     float _flare_hgt_dem_adj;   // height rate demand during flare adjusted for height tracking offset at flare entry (m)
     float _flare_hgt_dem_ideal; // height we want to fly at during flare (m)

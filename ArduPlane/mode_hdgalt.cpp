@@ -1,5 +1,6 @@
 #include "mode.h"
 #include "Plane.h"
+#include <GCS_MAVLink/GCS.h>
 
 #if MODE_HDGALT_ENABLED
 
@@ -61,6 +62,15 @@ const AP_Param::GroupInfo ModeHdgAlt::var_info[] = {
     // @User: Standard
     AP_GROUPINFO("PITCH_MAX", 6, ModeHdgAlt, pitch_max_deg, 10),
 
+    // @Param: CLIMB_FT
+    // @DisplayName: HDGALT climb-fail timeout
+    // @Description: Time TECS must remain unable to follow the demanded climb or descent (with altitude error outside the deadband) before HDGALT latches the climb-unachievable failsafe and holds the current altitude.
+    // @Range: 2 30
+    // @Increment: 1
+    // @Units: s
+    // @User: Standard
+    AP_GROUPINFO("CLIMB_FT", 7, ModeHdgAlt, climb_fail_timeout, 10.0),
+
     // @Group: HD_
     // @Path: ../libraries/AC_PID/AC_PID.cpp
     AP_SUBGROUPINFO(heading_pid, "HD_", 4, ModeHdgAlt, AC_PID),
@@ -88,6 +98,9 @@ bool ModeHdgAlt::_enter()
     altitude_cmd_m = plane.current_loc.alt * 0.01f;
     altitude_target_m = altitude_cmd_m;
     climb_rate_cmd_mps = climb_rate_default;
+
+    climb_failed_latched = false;
+    climb_fail_start_ms = 0;
 
     // initialise the shared target-altitude struct (slope offset,
     // terrain flags) consistently. HDGALT is barometric MSL only
@@ -155,6 +168,36 @@ void ModeHdgAlt::update()
                                     plane.ahrs.get_yaw_rad());
     plane.nav_roll_cd = compute_bank_command_cd(error_rad, dt);
     plane.update_load_factor();
+
+    // --- climb/descent-unachievable detection (design doc 3.4 / 6.4) ---
+    // TECS freezes its height demand when it can't follow the
+    // commanded climb/descent (pitch or throttle saturated). If that
+    // persists with the altitude error (to the *commanded* altitude)
+    // outside the deadband for HDGALT_CLIMB_FT seconds, latch the
+    // failsafe: clip the target to the current altitude and warn once.
+    const float DEADBAND_M = 5.0f;
+    const float current_alt_m = plane.current_loc.alt * 0.01f;
+    const float alt_err_m = altitude_cmd_m - current_alt_m;
+    if (!climb_failed_latched) {
+        if (fabsf(alt_err_m) > DEADBAND_M &&
+            plane.TECS_controller.height_demand_limited()) {
+            if (climb_fail_start_ms == 0) {
+                climb_fail_start_ms = now;
+            } else if ((now - climb_fail_start_ms) >
+                       (uint32_t)(climb_fail_timeout * 1000.0f)) {
+                climb_failed_latched = true;
+                // hold the altitude we can actually reach
+                altitude_cmd_m = current_alt_m;
+                altitude_target_m = current_alt_m;
+                gcs().send_text(MAV_SEVERITY_WARNING,
+                                "HDGALT: climb unachievable, holding altitude");
+            }
+        } else {
+            climb_fail_start_ms = 0;
+        }
+    }
+    // The latch clears only when a new HDGALT_COMMAND arrives
+    // (wired in step 6).
 
     // --- vertical: hold commanded MSL altitude via TECS ---
     // Slew the target toward the commanded altitude at no more than

@@ -317,7 +317,21 @@ altitude as well as heading.
 
 ## Step 5: Climb-failure detection
 
-**Status: NOT STARTED.**
+**Status: DONE** — acceptance met and agreed (committed with this
+note). Added a minimal library-wide accessor
+`AP_TECS::height_demand_limited()` exposing TECS's existing
+height-demand freeze (it had no public saturation getter). HDGALT
+latches the failsafe after `HDGALT_CLIMB_FT` s of that being true
+with altitude error (to commanded alt) outside a 5 m deadband:
+clips `altitude_cmd_m`/target to current, emits one STATUSTEXT.
+Latch clears only on a new HDGALT_COMMAND (hook documented; wired
+in step 6). New param `HDGALT_CLIMB_FT` (10 s). Validated with a
+TEMP +300 m instrumentation in `_enter` (per this step's notes, as
+no command path exists yet) — latched once with STATUSTEXT after
+the timeout, no repeat; instrumentation reverted before commit.
+Full end-to-end re-validation deferred to step 6. Enabled and
+`MODE_HDGALT_ENABLED=0` builds compile. Design doc §3.4/§6.4/§8.2
+updated.
 
 Goal: detect when TECS can't reach the commanded altitude and latch
 the failsafe.

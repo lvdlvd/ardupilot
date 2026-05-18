@@ -279,17 +279,32 @@ setpoint fed to TECS at that rate rather than by a TECS internal
 limit (see 8.2 for why); TECS tracks the moving setpoint and so
 does not exceed the cap during capture.
 
-**Climb failure detection.** TECS exposes saturation information
-(it knows when it's commanding maximum pitch and throttle and still
-falling behind on altitude). HDGALT monitors this: if TECS is
-saturated *and* the altitude error remains larger than a deadband
-for longer than `HDGALT_CLIMB_FAIL_TIMEOUT` seconds, HDGALT latches
-the **climb-unachievable** failsafe:
+**Climb failure detection.** TECS already limits its own height
+demand when it cannot follow a commanded climb or descent (pitch or
+throttle saturated against its limit while the demanded altitude is
+moving away). A small, library-wide accessor
+`AP_TECS::height_demand_limited()` exposes this existing internal
+state (a ~4-line, side-effect-free addition). HDGALT monitors it:
+if it is true *and* the altitude error (to the **commanded**
+altitude) stays outside a 5 m deadband for longer than
+`HDGALT_CLIMB_FT` seconds, HDGALT latches the **climb-unachievable**
+failsafe:
 
-- The internal altitude target is clipped to the current altitude.
-  TECS therefore stops trying to climb and stabilises level flight.
-- A warning bit `CLIMB_UNACHIEVABLE` is set in HDGALT_STATE.
-- A STATUSTEXT message is emitted (once, at MAV_SEVERITY_WARNING).
+- `altitude_cmd_m` and the slewed target are clipped to the current
+  altitude. TECS therefore stops trying to climb and stabilises
+  level flight.
+- A warning bit `CLIMB_UNACHIEVABLE` will be set in HDGALT_STATE
+  (step 7; step 5 carries the latched bool).
+- A STATUSTEXT is emitted once at `MAV_SEVERITY_WARNING`:
+  "HDGALT: climb unachievable, holding altitude".
+
+Note on the signal: because the climb-rate cap is enforced by
+*slewing* the fed setpoint (§8.2), the TECS demand is rising every
+tick while capturing a higher target, so this detector fires during
+the capture of any unreachable target — not only when the raw
+command step exceeds climb capability. When the held target is
+constant and reachable, the demand is not increasing and the
+detector correctly stays clear.
 
 The latch clears when a new HDGALT_COMMAND arrives, at which point
 the AP re-evaluates against the new target. This gives the FD a
@@ -509,14 +524,18 @@ Specific cases:
 
 ### 6.4 Climb or descent unachievable
 
-After `HDGALT_CLIMB_FAIL_TIMEOUT` seconds of TECS saturation with
-altitude error outside deadband, the AP latches the failsafe:
+After `HDGALT_CLIMB_FT` seconds of TECS height-demand limiting
+(`height_demand_limited()`) with altitude error outside the 5 m
+deadband, the AP latches the failsafe:
 
-- Internal altitude target is clipped to current altitude.
-- `CLIMB_UNACHIEVABLE` warning bit set in HDGALT_STATE.
-- One STATUSTEXT message emitted at MAV_SEVERITY_WARNING.
+- `altitude_cmd_m` and the slewed target are clipped to the current
+  altitude.
+- `CLIMB_UNACHIEVABLE` warning bit set in HDGALT_STATE (step 7;
+  step 5 holds the latched bool internally).
+- One STATUSTEXT emitted at MAV_SEVERITY_WARNING.
 
-Latch clears when a new HDGALT_COMMAND arrives.
+Latch clears when a new HDGALT_COMMAND arrives (wired in step 6;
+step 5 leaves a documented hook).
 
 ### 6.5 Airspeed below minimum
 
@@ -701,8 +720,10 @@ the shared `Plane::target_altitude` struct):
   path. `does_auto_throttle()` returns true so the scheduled TECS
   update runs; `update_target_altitude()` is overridden empty so the
   generic nav profile does not fight the held target.
-- Climb-unachievable detection is **step 5** (TECS exposes
-  saturation; the exact API is determined there).
+- Climb-unachievable detection (step 5) reads
+  `plane.TECS_controller.height_demand_limited()` — a new, minimal,
+  library-wide accessor exposing TECS's existing height-demand
+  freeze. See §3.4 and §6.4.
 
 The yaw path is unchanged from FBWA: rudder input passes through,
 yaw damper active.

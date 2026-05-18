@@ -1311,10 +1311,13 @@ void AP_TECS::update_pitch_throttle(int32_t hgt_dem_cm,
     const bool max_descent_condition = _pitch_dem_unc < _PITCHminf || _thr_clip_status == clipStatus::MIN;
     if (max_climb_condition && _hgt_dem_in_raw > _hgt_dem_in_prev) {
         _hgt_dem_in = _hgt_dem_in_prev;
+        _hgt_dem_limited = true;
     } else if (max_descent_condition && _hgt_dem_in_raw < _hgt_dem_in_prev) {
         _hgt_dem_in = _hgt_dem_in_prev;
+        _hgt_dem_limited = true;
     } else {
         _hgt_dem_in = _hgt_dem_in_raw;
+        _hgt_dem_limited = false;
     }
 
     // Update the throttle limits.

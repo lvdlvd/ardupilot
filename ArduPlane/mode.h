@@ -1079,6 +1079,7 @@ public:
     AP_Float airspeed_min;      // HDGALT_ASPD_MIN
     AP_Float climb_rate_default;// HDGALT_CLIMB_RT
     AP_Float pitch_max_deg;     // HDGALT_PITCH_MAX
+    AP_Float climb_fail_timeout;// HDGALT_CLIMB_FT
 
     // heading -> bank outer loop. Modelled on plane's existing
     // GUIDED heading-hold (g2.guidedHeading): error in radians,
@@ -1112,6 +1113,13 @@ private:
 
     // active climb-rate cap (from HDGALT_CLIMB_RT; FD override step 6)
     float climb_rate_cmd_mps;
+
+    // climb/descent-unachievable failsafe (design doc 3.4 / 6.4).
+    // Latched true after HDGALT_CLIMB_FT s of TECS demand-limiting
+    // with altitude error outside the deadband; cleared only by a
+    // new HDGALT_COMMAND (wired in step 6).
+    bool climb_failed_latched;
+    uint32_t climb_fail_start_ms;
 
     // dt bookkeeping for the heading PID
     uint32_t last_update_ms;
