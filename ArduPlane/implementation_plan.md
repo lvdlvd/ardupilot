@@ -254,7 +254,17 @@ snapshotted at engagement. Step 6 adds command handling.
 
 ## Step 4: Vertical passthrough to TECS
 
-**Status: NOT STARTED.**
+**Status: DONE** — acceptance met and agreed (committed with this
+note). Vertical now holds a commanded MSL altitude via TECS:
+`_enter` snapshots `current_loc.alt`; each tick a slewed
+`altitude_target_m` (capped at `HDGALT_CLIMB_RT`) is written to
+`plane.target_altitude.amsl_cm`, `TECS set_pitch_max(HDGALT_PITCH_MAX)`
+applied, then `calc_nav_pitch`+`calc_throttle` (LOITER pattern).
+The climb-rate cap is enforced by setpoint slewing (ArduPlane has
+no per-call TECS climb-rate API; design §3.4/§8.2 updated). New
+params `HDGALT_CLIMB_RT` (2.0), `HDGALT_PITCH_MAX` (10). Both
+`MODE_HDGALT_ENABLED` builds compile. SITL: over 60 s after
+engagement, altitude held to 1.5 m and heading to 4.4 deg.
 
 Goal: pass HDGALT's altitude setpoint to TECS so the plane holds
 altitude as well as heading.

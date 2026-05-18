@@ -1077,6 +1077,8 @@ public:
     AP_Float bank_max_deg;      // HDGALT_BANK_MAX
     AP_Float stall_margin;      // HDGALT_STALL_MGN
     AP_Float airspeed_min;      // HDGALT_ASPD_MIN
+    AP_Float climb_rate_default;// HDGALT_CLIMB_RT
+    AP_Float pitch_max_deg;     // HDGALT_PITCH_MAX
 
     // heading -> bank outer loop. Modelled on plane's existing
     // GUIDED heading-hold (g2.guidedHeading): error in radians,
@@ -1097,6 +1099,19 @@ private:
 
     // commanded magnetic heading setpoint, snapshotted on _enter()
     float heading_cmd_deg;
+
+    // commanded barometric (MSL) altitude setpoint, snapshotted on
+    // _enter(); FD-settable from step 6.
+    float altitude_cmd_m;
+
+    // altitude target actually fed to TECS, slewed toward
+    // altitude_cmd_m at no more than climb_rate_cmd_mps. This is how
+    // the climb-rate cap is enforced (TECS tracks the moving
+    // setpoint), without depending on a per-call TECS climb limit.
+    float altitude_target_m;
+
+    // active climb-rate cap (from HDGALT_CLIMB_RT; FD override step 6)
+    float climb_rate_cmd_mps;
 
     // dt bookkeeping for the heading PID
     uint32_t last_update_ms;

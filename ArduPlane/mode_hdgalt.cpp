@@ -43,6 +43,24 @@ const AP_Param::GroupInfo ModeHdgAlt::var_info[] = {
     // @User: Standard
     AP_GROUPINFO("ASPD_MIN", 3, ModeHdgAlt, airspeed_min, 10.0),
 
+    // @Param: CLIMB_RT
+    // @DisplayName: HDGALT default climb rate
+    // @Description: Default climb/descent rate cap used when capturing a new altitude. The flight director may override this per command.
+    // @Range: 0.5 10
+    // @Increment: 0.1
+    // @Units: m/s
+    // @User: Standard
+    AP_GROUPINFO("CLIMB_RT", 5, ModeHdgAlt, climb_rate_default, 2.0),
+
+    // @Param: PITCH_MAX
+    // @DisplayName: HDGALT maximum pitch
+    // @Description: Hard upper pitch limit passed to TECS in HDGALT mode.
+    // @Range: 5 25
+    // @Increment: 1
+    // @Units: deg
+    // @User: Standard
+    AP_GROUPINFO("PITCH_MAX", 6, ModeHdgAlt, pitch_max_deg, 10),
+
     // @Group: HD_
     // @Path: ../libraries/AC_PID/AC_PID.cpp
     AP_SUBGROUPINFO(heading_pid, "HD_", 4, ModeHdgAlt, AC_PID),
@@ -65,9 +83,19 @@ bool ModeHdgAlt::_enter()
     heading_pid.reset_filter();
     last_update_ms = AP_HAL::millis();
 
-    // placeholder vertical: hold the altitude we engaged at via
-    // TECS. Step 4 replaces this with an explicit altitude target.
+    // snapshot current barometric (MSL) altitude as the setpoint
+    // (design doc 3.2). current_loc.alt is AMSL in cm.
+    altitude_cmd_m = plane.current_loc.alt * 0.01f;
+    altitude_target_m = altitude_cmd_m;
+    climb_rate_cmd_mps = climb_rate_default;
+
+    // initialise the shared target-altitude struct (slope offset,
+    // terrain flags) consistently. HDGALT is barometric MSL only
+    // (design doc 1.3 / 3.1): never terrain-follow.
     plane.set_target_altitude_current();
+#if AP_TERRAIN_AVAILABLE
+    plane.target_altitude.terrain_following = false;
+#endif
 
     return true;
 }
@@ -128,9 +156,25 @@ void ModeHdgAlt::update()
     plane.nav_roll_cd = compute_bank_command_cd(error_rad, dt);
     plane.update_load_factor();
 
-    // --- vertical: placeholder (step 4 replaces with explicit
-    // HDGALT altitude target fed to TECS) ---
-    plane.update_fbwb_speed_height();
+    // --- vertical: hold commanded MSL altitude via TECS ---
+    // Slew the target toward the commanded altitude at no more than
+    // the climb-rate cap; TECS tracks the moving setpoint, so the
+    // cap is enforced without a per-call TECS climb limit (design
+    // doc 3.4). climb_rate_cmd_mps is a magnitude.
+    const float max_step_m = fabsf(climb_rate_cmd_mps) * dt;
+    altitude_target_m += constrain_float(altitude_cmd_m - altitude_target_m,
+                                         -max_step_m, max_step_m);
+
+    plane.target_altitude.amsl_cm = lroundf(altitude_target_m * 100.0f);
+    plane.reset_offset_altitude();
+
+    // hard pitch cap on the TECS side (design doc 3.4 / HDGALT_PITCH_MAX)
+    plane.TECS_controller.set_pitch_max(pitch_max_deg);
+
+    // apply TECS pitch + throttle demands, as LOITER does in its
+    // non-stick-mixing path
+    plane.calc_nav_pitch();
+    plane.calc_throttle();
 }
 
 #endif // MODE_HDGALT_ENABLED

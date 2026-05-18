@@ -273,9 +273,11 @@ The AP does not implement its own altitude PID. The vertical
 controller is, for all practical purposes, TECS — already tuned and
 tested in ArduPlane's existing modes.
 
-The climb-rate cap `HDGALT_CLIMB_RATE_DEFAULT` (or per-command
-override) is passed to TECS as its maximum climb rate. TECS does
-not exceed it during capture.
+The climb-rate cap `HDGALT_CLIMB_RT` (or per-command override)
+bounds the capture rate. It is enforced by slewing the altitude
+setpoint fed to TECS at that rate rather than by a TECS internal
+limit (see 8.2 for why); TECS tracks the moving setpoint and so
+does not exceed the cap during capture.
 
 **Climb failure detection.** TECS exposes saturation information
 (it knows when it's commanding maximum pitch and throttle and still
@@ -672,19 +674,35 @@ consistent with its no-position-awareness design.
 ### 8.2 Reused controllers
 
 The lateral path:
-- HDGALT's heading PID produces a bank angle command.
-- Bank command goes to `Plane::stabilize_roll(bank_cmd)` — the
-  existing roll attitude controller. Already tuned, already
-  composes with the yaw damper, already handles servo saturation.
+- HDGALT's heading `AC_PID` produces a bank command in centidegrees
+  (see 8.3); `update()` writes it to `plane.nav_roll_cd` and calls
+  `plane.update_load_factor()`. The base `Mode::run()` then runs the
+  existing `stabilize_roll/pitch/yaw` attitude controllers — already
+  tuned, composes with the yaw damper, handles servo saturation.
 
-The vertical path:
-- HDGALT sets TECS targets via existing TECS API:
-  `tecs->set_altitude_target_m(altitude_cmd_m);`
-  `tecs->set_pitch_max_climb_rate_mps(climb_rate_cmd_mps);`
-  `tecs->set_pitch_max_descent_rate_mps(climb_rate_cmd_mps);`
-- TECS handles pitch and throttle coordination as it does in AUTO.
-- HDGALT reads TECS state to detect climb-unachievable:
-  `tecs->is_saturated_climb()` (or equivalent existing TECS API).
+The vertical path (as implemented — ArduPlane has no
+`tecs->set_altitude_target_m`-style API; targets are driven through
+the shared `Plane::target_altitude` struct):
+
+- On `_enter()`, the current AMSL altitude (`current_loc.alt`) is
+  snapshotted into `altitude_cmd_m`; `set_target_altitude_current()`
+  initialises the shared struct and terrain-following is forced off
+  (HDGALT is barometric MSL only, design 1.3 / 3.1).
+- Each tick, a separate `altitude_target_m` is slewed toward
+  `altitude_cmd_m` by at most `climb_rate_cmd_mps * dt`. **This is
+  how the climb-rate cap is enforced**: TECS tracks the moving
+  setpoint, so no per-call TECS climb-rate limiter is needed (none
+  exists; `TECS_CLMB_MAX` is a global param). The slewed value is
+  written to `plane.target_altitude.amsl_cm`.
+- `TECS_controller.set_pitch_max(HDGALT_PITCH_MAX)` applies the hard
+  pitch cap (same per-tick setter `takeoff` uses).
+- `plane.calc_nav_pitch()` and `plane.calc_throttle()` apply the
+  TECS pitch/throttle demands, mirroring LOITER's non-stick-mixing
+  path. `does_auto_throttle()` returns true so the scheduled TECS
+  update runs; `update_target_altitude()` is overridden empty so the
+  generic nav profile does not fight the held target.
+- Climb-unachievable detection is **step 5** (TECS exposes
+  saturation; the exact API is determined there).
 
 The yaw path is unchanged from FBWA: rudder input passes through,
 yaw damper active.
