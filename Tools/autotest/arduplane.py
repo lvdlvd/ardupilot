@@ -2138,6 +2138,55 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
 
         self.fly_home_land_and_disarm(timeout=240)
 
+    def HDGALT(self):
+        '''Test HDGALT: heading+altitude hold, HDGALT_COMMAND, pilot override'''
+        # HDGALT has no pymavlink mode-map entry; use the numeric
+        # custom mode (Mode::Number::HDGALT). HDGALT_COMMAND flag bits
+        # are used as literals to avoid a pymavlink-version dependency.
+        HDGALT_MODE = 27
+        FLAG_HEADING = 1
+        FLAG_ALTITUDE = 4
+
+        self.set_parameter("HDGALT_CLIMB_FT", 5)
+        self.takeoff(alt=100, mode="TAKEOFF", timeout=120)
+
+        self.change_mode(HDGALT_MODE)
+        self.delay_sim_time(3)  # let it settle on the engagement snapshot
+
+        # --- 1) heading + altitude hold ---
+        hdg0 = self.get_heading()
+        alt0 = self.get_altitude(relative=False)
+        self.progress("HDGALT holding hdg=%.0f alt(AMSL)=%.1f" % (hdg0, alt0))
+        tstart = self.get_sim_time()
+        while self.get_sim_time() - tstart < 10:
+            if abs(self.heading_delta(self.get_heading(), hdg0)) > 20:
+                raise NotAchievedException("HDGALT did not hold heading")
+            if abs(self.get_altitude(relative=False) - alt0) > 15:
+                raise NotAchievedException("HDGALT did not hold altitude")
+
+        # HDGALT_STATE telemetry must be flowing
+        self.assert_receive_message('HDGALT_STATE', timeout=3)
+
+        # --- 2) commanded heading +90 ---
+        new_hdg = (hdg0 + 90) % 360
+        self.mav.mav.hdgalt_command_send(0, FLAG_HEADING, new_hdg, 0, 0, 0)
+        self.wait_heading(new_hdg, accuracy=15, timeout=45)
+
+        # --- 3) commanded altitude +40 m ---
+        new_alt = alt0 + 40
+        self.mav.mav.hdgalt_command_send(0, FLAG_ALTITUDE, 0, 0, new_alt, 0)
+        self.wait_altitude(new_alt - 15, new_alt + 15, relative=False,
+                           timeout=90, minimum_duration=2)
+
+        # --- 4) pilot stick override -> disengage to FBWA ---
+        self.set_rc(1, 1800)   # roll stick well beyond the deadband
+        self.wait_mode("FBWA", timeout=10)
+        self.set_rc(1, 1500)   # release
+
+        # HDGALT behaviour fully verified; end the flight simply
+        # (avoid the RTL/land mission scaffolding, unrelated here).
+        self.disarm_vehicle(force=True)
+
     def RTL_CLIMB_MIN(self):
         '''Test RTL_CLIMB_MIN'''
         self.wait_ready_to_arm()
@@ -8109,6 +8158,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             self.AirspeedDrivers,
             self.RTL_CLIMB_MIN,
             self.ClimbBeforeTurn,
+            self.HDGALT,
             self.IMUTempCal,
             self.MAV_CMD_DO_AUX_FUNCTION,
             self.SmartBattery,

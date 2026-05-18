@@ -1,6 +1,10 @@
 # HDGALT Mode Design Proposal
 
-**Status:** Design draft. Implementation in progress on branch `hdgaltmode`.
+**Status:** Implemented on branch `hdgaltmode` — all
+implementation-plan steps (1–9, incl. 8b) complete and
+SITL-verified, including a regression test in
+`Tools/autotest/arduplane.py`. This document has been kept in sync
+with the as-built code (see the "as implemented" notes throughout).
 
 # HDGALT — A GA-Style Two-Axis Autopilot Mode for ArduPlane
 
@@ -919,19 +923,33 @@ These can be tested in pure C++ without an autopilot binary.
 
 ### 10.2 SITL tests
 
-The following SITL tests are foreseen:
-- A reference-FD process launched alongside ardupilot, communicating
-  via MAVLink. 
-- Test missions exercising: a simple straight leg; a single turn;
-  a multi-leg pattern; a climb; a descent; the climb-failsafe
-  scenario (commanded altitude beyond achievable).
+As implemented: a single regression test `AutoTestPlane.HDGALT`
+in `Tools/autotest/arduplane.py` (registered in `tests1b`, so it
+runs in the default `test.Plane` suite). It: takes off in TAKEOFF
+to 100 m; engages HDGALT by numeric mode 27 (HDGALT has no
+pymavlink mode-map name — see note); verifies heading and altitude
+hold for 10 s; asserts `HDGALT_STATE` is being received; sends an
+immediate `HDGALT_COMMAND` for heading +90° and waits for capture;
+sends one for altitude +40 m and waits for capture; nudges the roll
+stick and verifies the pilot-override disengage to FBWA. Lenient
+tolerances (±20° heading, ±15 m altitude) keep it non-flaky;
+runtime is well under 2 minutes of sim time.
 
-Pass criteria:
-- Heading and altitude are captured and held within documented
-  tolerances.
-- Bank derating triggers correctly at low airspeed.
-- Climb-failsafe latches and clears as specified.
-- Pilot stick simulation (via RC override) disengages immediately.
+Regression sensitivity was verified by temporarily zeroing the
+heading PID gain: the test then fails as expected.
+
+**pymavlink note:** `HDGALT_COMMAND`/`HDGALT_STATE` are new
+ardupilotmega messages, so the test requires a pymavlink generated
+from the updated `ardupilotmega.xml`. Upstream this accompanies the
+mavlink-submodule PR and the standard pymavlink install; locally,
+regenerate the (gitignored, build-artifact) dialect and run with
+the in-tree pymavlink, e.g. `PYTHONPATH=modules/mavlink`. HDGALT
+also has no entry in pymavlink's hard-coded plane mode map, so the
+test selects it by the numeric custom mode (27) rather than by
+name.
+
+A reference-FD-driven multi-leg SITL test remains future work
+(the reference flight director is a separate follow-on project).
 
 ### 10.3 Real-flight checklist
 

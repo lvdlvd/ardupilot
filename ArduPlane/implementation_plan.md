@@ -636,7 +636,23 @@ raising `HDGALT_ASPD_MIN` to 30 → disengaged to FBWA ~2 s later
 
 ## Step 9: Integration test in `Tools/autotest/`
 
-**Status: NOT STARTED.**
+**Status: DONE** — acceptance met and agreed (committed with this
+note). `AutoTestPlane.HDGALT` added to `Tools/autotest/arduplane.py`
+and registered in `tests1b` (runs in the default `test.Plane`
+suite). It takes off in TAKEOFF to 100 m, engages HDGALT (numeric
+mode 27 — no pymavlink mode-map name), verifies heading+altitude
+hold for 10 s, asserts `HDGALT_STATE` is received, commands heading
++90° and altitude +40 m (waiting for capture each), then nudges the
+roll stick and verifies disengage to FBWA. `PASSED STEP:
+test.Plane.HDGALT`. Regression sensitivity confirmed: temporarily
+zeroing the heading PID gain makes the test FAIL, reverted after.
+Both `MODE_HDGALT_ENABLED` builds compile. Design doc §10.2
+updated.
+
+Requires pymavlink generated from the updated `ardupilotmega.xml`
+(the dialect is a gitignored build artifact; upstream this rides
+with the mavlink-submodule PR + standard pymavlink install).
+Locally: regenerate and run with `PYTHONPATH=modules/mavlink`.
 
 Goal: an automated test that verifies HDGALT works end-to-end, run
 as part of ArduPilot's standard test suite.
