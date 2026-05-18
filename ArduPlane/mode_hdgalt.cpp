@@ -131,6 +131,7 @@ bool ModeHdgAlt::_enter()
     turn_derated = false;
     last_state_ms = 0;
     have_throttle_ref = false;
+    low_airspeed_start_ms = 0;
 
     // initialise the shared target-altitude struct (slope offset,
     // terrain flags) consistently. HDGALT is barometric MSL only
@@ -293,11 +294,40 @@ bool ModeHdgAlt::check_pilot_override()
     return false;
 }
 
+// Airspeed-floor protection (design doc 6.5): if indicated airspeed
+// stays below HDGALT_ASPD_MIN for more than a 1 s debounce,
+// disengage to HDGALT_DISENG. HDGALT must not try to hold heading
+// near the stall.
+bool ModeHdgAlt::check_airspeed_floor()
+{
+    const uint32_t now = AP_HAL::millis();
+    if (plane.smoothed_airspeed < airspeed_min) {
+        if (low_airspeed_start_ms == 0) {
+            low_airspeed_start_ms = now;
+        } else if (now - low_airspeed_start_ms > 1000) {
+            gcs().send_text(MAV_SEVERITY_WARNING,
+                            "HDGALT: airspeed below minimum, disengaging");
+            plane.set_mode((uint8_t)disengage_mode.get(),
+                           ModeReason::FAILSAFE);
+            return true;
+        }
+    } else {
+        low_airspeed_start_ms = 0;
+    }
+    return false;
+}
+
 void ModeHdgAlt::update()
 {
     // Pilot supremacy is checked first, every tick, before any
     // control work. If it disengaged, do nothing else this tick.
     if (check_pilot_override()) {
+        return;
+    }
+
+    // Envelope protection: bail out if we are getting too slow
+    // (design doc 6.5).
+    if (check_airspeed_floor()) {
         return;
     }
 

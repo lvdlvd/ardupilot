@@ -571,6 +571,14 @@ A STATUSTEXT is emitted: "HDGALT: airspeed below minimum, disengaging."
 The disengage target is `HDGALT_DISENG`. The pilot or FD
 must reassess the situation before re-engaging.
 
+As implemented (`ModeHdgAlt::check_airspeed_floor()`, run in
+`update()` right after the pilot-override check): the airspeed
+source is `plane.smoothed_airspeed` (the same signal the
+stall-margin bank limit uses; GPS-free); the 1 s debounce timer
+resets whenever airspeed recovers above the floor; the mode change
+uses `ModeReason::FAILSAFE` (no airspeed-specific `ModeReason`
+exists — this is envelope protection).
+
 ### 6.6 Pilot stick override
 
 See section 3.5. Disengage is immediate, no debounce, no STATUSTEXT

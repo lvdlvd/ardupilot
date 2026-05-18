@@ -1173,6 +1173,10 @@ private:
     float throttle_ref_pct;
     bool  have_throttle_ref;
 
+    // airspeed-floor disengage (design doc 6.5): time the airspeed
+    // first went below HDGALT_ASPD_MIN, 0 if currently above
+    uint32_t low_airspeed_start_ms;
+
     // dt bookkeeping for the heading PID
     uint32_t last_update_ms;
 
@@ -1185,6 +1189,11 @@ private:
     // disengages immediately to HDGALT_DISENG. Returns true if it
     // disengaged (caller must return without further control).
     bool check_pilot_override();
+
+    // airspeed-floor protection (design doc 6.5): airspeed below
+    // HDGALT_ASPD_MIN for >1 s disengages to HDGALT_DISENG. Returns
+    // true if it disengaged (caller must return).
+    bool check_airspeed_floor();
 };
 #endif // MODE_HDGALT_ENABLED
 

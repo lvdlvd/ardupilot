@@ -554,8 +554,9 @@ captured at engage. Design doc §3.5 updated; also fixed §4
 AP_Param 16-char limit) and normalised all old param names in the
 doc.
 
-GAP: design §6.5 (disengage when airspeed < `HDGALT_ASPD_MIN`) is
-specified but is not a numbered plan step; raised with the user.
+GAP (resolved in step 8b): design §6.5 (disengage when airspeed <
+`HDGALT_ASPD_MIN`) was specified but not a numbered plan step;
+user chose to add it as step 8b.
 
 SITL: no-RC → stays engaged; neutral override → no false trigger;
 roll nudge → disengaged to FBWA; re-engage works. Both
@@ -610,6 +611,26 @@ switching to FBWA (or `HDGALT_DISENGAGE_MODE`).
   throttle as a value 0–100 (or 0–1). The pilot's throttle stick is
   in raw RC units. The comparison must be against equivalent units;
   normalize to fraction of full range on both sides.
+
+---
+
+## Step 8b: Airspeed-floor disengage (design §6.5)
+
+**Status: DONE** — acceptance met and agreed (committed with this
+note). Added because design §6.5 had no numbered step (user chose
+step 8b). `ModeHdgAlt::check_airspeed_floor()` runs in `update()`
+right after the pilot-override check: if `plane.smoothed_airspeed`
+stays below `HDGALT_ASPD_MIN` for >1 s (debounce timer resets on
+recovery), disengage to `HDGALT_DISENG` via
+`set_mode(..., ModeReason::FAILSAFE)` with STATUSTEXT "HDGALT:
+airspeed below minimum, disengaging". No new param (reuses
+`HDGALT_ASPD_MIN`; 1 s debounce hardcoded per design). Design doc
+§6.5 updated.
+
+SITL: healthy airspeed (22.5 m/s vs floor 10) → no disengage;
+raising `HDGALT_ASPD_MIN` to 30 → disengaged to FBWA ~2 s later
+(≥1 s debounce honoured) with the STATUSTEXT. Both
+`MODE_HDGALT_ENABLED` builds compile.
 
 ---
 
