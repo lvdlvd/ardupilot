@@ -1007,11 +1007,37 @@ void GCS_MAVLINK_Plane::handle_message(const mavlink_message_t &msg)
         handle_set_position_target_global_int(msg);
         break;
 
+#if MODE_HDGALT_ENABLED
+    case MAVLINK_MSG_ID_HDGALT_COMMAND:
+        handle_hdgalt_command(msg);
+        break;
+#endif
+
     default:
         GCS_MAVLINK::handle_message(msg);
         break;
     } // end switch
 } // end handle mavlink
+
+#if MODE_HDGALT_ENABLED
+void GCS_MAVLINK_Plane::handle_hdgalt_command(const mavlink_message_t &msg)
+{
+    // Route only while HDGALT is the active mode; otherwise the
+    // command is dropped (design doc 8.4 — the FD should not send
+    // unless it sees HDGALT in HEARTBEAT).
+    if (plane.control_mode != &plane.mode_hdgalt) {
+        return;
+    }
+    mavlink_hdgalt_command_t packet;
+    mavlink_msg_hdgalt_command_decode(&msg, &packet);
+    plane.mode_hdgalt.handle_hdgalt_command(packet.start_time_boot_ms,
+                                            packet.flags,
+                                            packet.heading_deg,
+                                            packet.turn_rate_dps,
+                                            packet.altitude_m,
+                                            packet.climb_rate_mps);
+}
+#endif
 
 void GCS_MAVLINK_Plane::handle_set_attitude_target(const mavlink_message_t &msg)
     {

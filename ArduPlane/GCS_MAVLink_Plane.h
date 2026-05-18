@@ -53,6 +53,9 @@ private:
     void send_pid_info(const struct AP_PIDInfo *pid_info, const uint8_t axis, const float achieved);
 
     void handle_message(const mavlink_message_t &msg) override;
+    // defined only when MODE_HDGALT_ENABLED; the only call site is
+    // guarded too, so it is never ODR-used when the mode is compiled out
+    void handle_hdgalt_command(const mavlink_message_t &msg);
     bool handle_guided_request(AP_Mission::Mission_Command &cmd) override;
     void handle_change_alt_request(Location &location) override;
     MAV_RESULT handle_command_int_do_reposition(const mavlink_command_int_t &packet);

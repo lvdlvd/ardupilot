@@ -622,12 +622,20 @@ public:
     bool does_auto_throttle() const override { return true; }
     void update_target_altitude() override {};   // we manage it
 
-    void handle_HDGALT_COMMAND(const mavlink_message_t &msg);
+    // GCS_MAVLINK decodes HDGALT_COMMAND and calls this with
+    // scalars (no MAVLink types in mode.h):
+    void handle_hdgalt_command(uint32_t start_time_boot_ms, uint16_t flags,
+                               float heading_deg, float turn_rate_dps,
+                               float altitude_m, float climb_rate_mps);
 
     static const struct AP_Param::GroupInfo var_info[];
     AP_Float bank_max_deg;   // HDGALT_BANK_MAX
     AP_Float stall_margin;   // HDGALT_STALL_MGN
     AP_Float airspeed_min;   // HDGALT_ASPD_MIN
+    AP_Float climb_rate_default; // HDGALT_CLIMB_RT
+    AP_Float pitch_max_deg;      // HDGALT_PITCH_MAX
+    AP_Float climb_fail_timeout; // HDGALT_CLIMB_FT
+    AP_Float turn_rate_default;  // HDGALT_TURN_RATE
     // heading->bank, mirrors g2.guidedHeading (AC_PID)
     AC_PID heading_pid{5000.0, 0.0, 0.0, 0.0, 10.0, 5.0, 5.0, 5.0, 0.0};
 
@@ -646,10 +654,16 @@ private:
     float climb_rate_cmd_mps;   // step 4/6
     uint32_t last_update_ms;
 
-    // pending future command (step 6)
-    uint32_t pending_start_time_ms;
-    bool pending_command_valid;
-    // ... pending values
+    // single-slot pending future command (step 6)
+    struct {
+        bool valid;
+        uint32_t start_ms;
+        uint16_t flags;
+        float heading_deg, turn_rate_dps, altitude_m, climb_rate_mps;
+    } pending;
+    void apply_command(uint16_t flags, float heading_deg,
+                       float turn_rate_dps, float altitude_m,
+                       float climb_rate_mps);
 
     // failsafe state (step 5)
     bool climb_failed_latched;
@@ -779,19 +793,35 @@ plumbing.
 
 ### 8.4 MAVLink registration
 
-The new messages live in a custom dialect XML file initially. For
-upstream contribution, they'd be proposed for common.xml. The
-custom dialect lets us iterate the message format during development
-without requiring upstream coordination.
+The new messages live in the ardupilotmega dialect (see §5). As
+implemented in step 6:
 
-ArduPlane registers a handler for HDGALT_COMMAND in the GCS_MAVLINK
-infrastructure, routing it to the active mode if HDGALT is engaged.
-If HDGALT is not engaged, the command is logged and dropped (the
-FD shouldn't be sending commands when HDGALT isn't active, but the
-behavior is defined).
+- `GCS_MAVLINK_Plane::handle_message()` adds a
+  `case MAVLINK_MSG_ID_HDGALT_COMMAND` (guarded by
+  `MODE_HDGALT_ENABLED`) → `handle_hdgalt_command(msg)`.
+- That helper drops the command unless HDGALT is the active mode
+  (design §3.2: the FD only sends while it sees HDGALT in
+  HEARTBEAT), then `mavlink_msg_hdgalt_command_decode()`s it and
+  calls the mode with **scalars**, not the raw message. This keeps
+  MAVLink types out of `mode.h`; it is a deliberate signature change
+  from the earlier `handle_HDGALT_COMMAND(const mavlink_message_t&)`
+  sketch in §8.1:
+  `ModeHdgAlt::handle_hdgalt_command(start_time_boot_ms, flags,
+  heading_deg, turn_rate_dps, altitude_m, climb_rate_mps)`.
+- Timing uses the AP clock (`AP_HAL::millis()`, same base as
+  `SYSTEM_TIME.time_boot_ms`): `start_time_boot_ms == 0` or in the
+  past → apply immediately (past is logged "late" via STATUSTEXT);
+  in the future → stored in the single-slot `pending` struct,
+  replacing any queued command; `update()` applies it once the AP
+  clock reaches `start_ms`. An immediate command also clears any
+  queued one.
+- `apply_command()` honours the per-axis `HDGALT_COMMAND_FLAGS`
+  bits (unset axis keeps its value) and clears the
+  climb-unachievable latch (design §3.4/§6.4) — wiring the hook
+  step 5 left.
 
-HDGALT_STATE is emitted by the mode's `update()` at the configured
-stream rate.
+HDGALT_STATE is emitted by the mode at the configured stream rate
+(step 7).
 
 ### 8.5 Parameters
 

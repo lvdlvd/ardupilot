@@ -71,6 +71,15 @@ const AP_Param::GroupInfo ModeHdgAlt::var_info[] = {
     // @User: Standard
     AP_GROUPINFO("CLIMB_FT", 7, ModeHdgAlt, climb_fail_timeout, 10.0),
 
+    // @Param: TURN_RATE
+    // @DisplayName: HDGALT default turn rate
+    // @Description: Default turn-rate cap used when capturing a new heading. The flight director may override this per command. The commanded bank is additionally limited so the turn rate does not exceed this.
+    // @Range: 1 15
+    // @Increment: 0.5
+    // @Units: deg/s
+    // @User: Standard
+    AP_GROUPINFO("TURN_RATE", 8, ModeHdgAlt, turn_rate_default, 3.0),
+
     // @Group: HD_
     // @Path: ../libraries/AC_PID/AC_PID.cpp
     AP_SUBGROUPINFO(heading_pid, "HD_", 4, ModeHdgAlt, AC_PID),
@@ -98,6 +107,9 @@ bool ModeHdgAlt::_enter()
     altitude_cmd_m = plane.current_loc.alt * 0.01f;
     altitude_target_m = altitude_cmd_m;
     climb_rate_cmd_mps = climb_rate_default;
+    turn_rate_cmd_dps = turn_rate_default;
+
+    pending.valid = false;
 
     climb_failed_latched = false;
     climb_fail_start_ms = 0;
@@ -115,8 +127,67 @@ bool ModeHdgAlt::_enter()
 
 void ModeHdgAlt::_exit()
 {
-    // TODO(hdgalt): release any latched failsafe state once it
-    // exists (step 5). Nothing mode-specific to clean up yet.
+    // Nothing mode-specific to release: the lateral PID and the
+    // shared TECS/target-altitude state are reset by the next mode's
+    // entry and by Mode::reset_controllers().
+}
+
+// Apply a (possibly partial) command immediately. Per design doc
+// 5.1, an axis is updated only if its flag bit is set; unset axes
+// keep their current value. Any applied command clears the
+// climb-unachievable latch (design doc 3.4 / 6.4).
+void ModeHdgAlt::apply_command(uint16_t flags, float heading_deg,
+                               float turn_rate_dps, float altitude_m,
+                               float climb_rate_mps)
+{
+    if (flags & HDGALT_COMMAND_FLAG_HEADING) {
+        heading_cmd_deg = wrap_360(heading_deg);
+    }
+    if (flags & HDGALT_COMMAND_FLAG_TURN_RATE) {
+        turn_rate_cmd_dps = fabsf(turn_rate_dps);
+    }
+    if (flags & HDGALT_COMMAND_FLAG_ALTITUDE) {
+        altitude_cmd_m = altitude_m;
+    }
+    if (flags & HDGALT_COMMAND_FLAG_CLIMB_RATE) {
+        climb_rate_cmd_mps = fabsf(climb_rate_mps);
+    }
+
+    // A new command is the FD acknowledging state: clear the
+    // climb-unachievable latch and re-evaluate against the new target.
+    climb_failed_latched = false;
+    climb_fail_start_ms = 0;
+}
+
+void ModeHdgAlt::handle_hdgalt_command(uint32_t start_time_boot_ms,
+                                       uint16_t flags, float heading_deg,
+                                       float turn_rate_dps, float altitude_m,
+                                       float climb_rate_mps)
+{
+    const uint32_t now = AP_HAL::millis();
+
+    if (start_time_boot_ms == 0 || start_time_boot_ms <= now) {
+        if (start_time_boot_ms != 0 && start_time_boot_ms < now) {
+            gcs().send_text(MAV_SEVERITY_INFO,
+                            "HDGALT: command %u ms late, applied now",
+                            (unsigned)(now - start_time_boot_ms));
+        }
+        apply_command(flags, heading_deg, turn_rate_dps, altitude_m,
+                      climb_rate_mps);
+        // an immediate command supersedes any queued one
+        pending.valid = false;
+        return;
+    }
+
+    // Future command: single-slot queue, replaces any pending one
+    // (design doc 2.3 / 5.1).
+    pending.valid = true;
+    pending.start_ms = start_time_boot_ms;
+    pending.flags = flags;
+    pending.heading_deg = heading_deg;
+    pending.turn_rate_dps = turn_rate_dps;
+    pending.altitude_m = altitude_m;
+    pending.climb_rate_mps = climb_rate_mps;
 }
 
 // Heading -> bank outer loop, clipped by the static bank limit and
@@ -144,6 +215,16 @@ float ModeHdgAlt::compute_bank_command_cd(float heading_error_rad, float dt)
             bank_stall_max_deg = degrees(acosf(sq(ratio)));
         }
         bank_limit_deg = MIN(bank_limit_deg, bank_stall_max_deg);
+
+        // Turn-rate cap (design doc 3.3): a coordinated turn has
+        // omega = g*tan(phi)/V, so the bank that yields exactly the
+        // commanded turn rate is phi = atan(omega*V/g).
+        if (is_positive(turn_rate_cmd_dps)) {
+            const float bank_turn_max_deg =
+                degrees(atanf(radians(turn_rate_cmd_dps) * airspeed /
+                              GRAVITY_MSS));
+            bank_limit_deg = MIN(bank_limit_deg, bank_turn_max_deg);
+        }
     }
 
     // Never exceed the airframe roll limit either.
@@ -161,6 +242,14 @@ void ModeHdgAlt::update()
     if (!is_positive(dt) || dt > 1.0f) {
         // first tick after engage, or a long stall: use a nominal dt
         dt = 0.02f;
+    }
+
+    // --- apply a queued future command whose time has arrived ---
+    if (pending.valid && now >= pending.start_ms) {
+        apply_command(pending.flags, pending.heading_deg,
+                      pending.turn_rate_dps, pending.altitude_m,
+                      pending.climb_rate_mps);
+        pending.valid = false;
     }
 
     // --- lateral: heading hold ---

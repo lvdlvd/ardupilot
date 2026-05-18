@@ -329,9 +329,11 @@ in step 6). New param `HDGALT_CLIMB_FT` (10 s). Validated with a
 TEMP +300 m instrumentation in `_enter` (per this step's notes, as
 no command path exists yet) — latched once with STATUSTEXT after
 the timeout, no repeat; instrumentation reverted before commit.
-Full end-to-end re-validation deferred to step 6. Enabled and
-`MODE_HDGALT_ENABLED=0` builds compile. Design doc §3.4/§6.4/§8.2
-updated.
+Enabled and `MODE_HDGALT_ENABLED=0` builds compile. Design doc
+§3.4/§6.4/§8.2 updated. End-to-end re-validated at step 6 via the
+real MAVLink path: an unreachable HDGALT_COMMAND latches the
+failsafe; a new command clears it; it can re-latch (proving the
+clear is real, not just quiet).
 
 Goal: detect when TECS can't reach the commanded altitude and latch
 the failsafe.
@@ -396,7 +398,30 @@ the failsafe.
 
 ## Step 6: MAVLink command handling
 
-**Status: NOT STARTED.**
+**Status: DONE** — acceptance met and agreed (committed with this
+note). `GCS_MAVLINK_Plane::handle_message` routes
+`HDGALT_COMMAND` (guarded) → decodes → calls
+`ModeHdgAlt::handle_hdgalt_command(...)` with scalars (no MAVLink
+types in mode.h — signature change from the design sketch, §8.1/§8.4
+updated). Immediate / past / future (single-slot queue, AP-clock
+gated) handling; per-axis flag honouring; new param
+`HDGALT_TURN_RATE` (3.0) which also caps bank via
+omega=g*tan(phi)/V. `apply_command` clears the step-5 latch.
+Command dropped unless HDGALT is active.
+
+Acceptance run **GPS-denied** (option A: GPS only for the
+mode-independent arm/climb, then `SIM_GPS1_ENABLE=0` in flight
+before HDGALT engage): HDGALT engaged with no fix; immediate
+heading +90 tracked (6.3°), immediate altitude +60 m tracked
+(6.1 m), queued +8 s command did not act early (0.2°) then
+converged (6.9°). Step 5↔6: unreachable command latched the
+failsafe, a new command cleared it, and it re-latched. Both
+`MODE_HDGALT_ENABLED` builds compile.
+
+NOTE (follow-up, post-plan): the autotest scaffold still needs GPS
+for the *takeoff/arm* (ArduPlane requires home + EKF-yaw to arm,
+independent of mode/GPS). To be addressed after the plan; HDGALT
+itself uses no GPS, as demonstrated.
 
 Goal: process incoming `HDGALT_COMMAND` messages, update setpoints,
 handle the single-slot future queue.

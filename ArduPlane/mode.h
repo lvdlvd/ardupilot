@@ -1063,6 +1063,16 @@ public:
     // methods that affect movement of the vehicle in this mode
     void update() override;
 
+    // Decoded HDGALT_COMMAND from the flight director. GCS_MAVLINK
+    // decodes the message and calls this with scalars (keeps MAVLink
+    // types out of mode.h). start_time_boot_ms uses the same base as
+    // SYSTEM_TIME.time_boot_ms: 0 = immediate, future = queued
+    // (single slot, replaces any pending), past = applied + logged
+    // late. flags is the HDGALT_COMMAND_FLAGS bitmask.
+    void handle_hdgalt_command(uint32_t start_time_boot_ms, uint16_t flags,
+                               float heading_deg, float turn_rate_dps,
+                               float altitude_m, float climb_rate_mps);
+
     // vertical is handled via TECS (placeholder in step 3, explicit
     // altitude target in step 4); let the auto-throttle path run.
     bool does_auto_throttle() const override { return true; }
@@ -1080,6 +1090,7 @@ public:
     AP_Float climb_rate_default;// HDGALT_CLIMB_RT
     AP_Float pitch_max_deg;     // HDGALT_PITCH_MAX
     AP_Float climb_fail_timeout;// HDGALT_CLIMB_FT
+    AP_Float turn_rate_default; // HDGALT_TURN_RATE
 
     // heading -> bank outer loop. Modelled on plane's existing
     // GUIDED heading-hold (g2.guidedHeading): error in radians,
@@ -1111,8 +1122,29 @@ private:
     // setpoint), without depending on a per-call TECS climb limit.
     float altitude_target_m;
 
-    // active climb-rate cap (from HDGALT_CLIMB_RT; FD override step 6)
+    // active climb-rate cap (from HDGALT_CLIMB_RT or FD override)
     float climb_rate_cmd_mps;
+
+    // active turn-rate cap (from HDGALT_TURN_RATE or FD override),
+    // deg/s; additionally limits the commanded bank in capture.
+    float turn_rate_cmd_dps;
+
+    // single-slot pending (future) command (design doc 2.3 / 5.1)
+    struct {
+        bool valid;
+        uint32_t start_ms;
+        uint16_t flags;
+        float heading_deg;
+        float turn_rate_dps;
+        float altitude_m;
+        float climb_rate_mps;
+    } pending;
+
+    // apply a (possibly partial, per flags) command now and clear
+    // the climb-unachievable latch (design doc 3.4 / 6.4)
+    void apply_command(uint16_t flags, float heading_deg,
+                       float turn_rate_dps, float altitude_m,
+                       float climb_rate_mps);
 
     // climb/descent-unachievable failsafe (design doc 3.4 / 6.4).
     // Latched true after HDGALT_CLIMB_FT s of TECS demand-limiting
