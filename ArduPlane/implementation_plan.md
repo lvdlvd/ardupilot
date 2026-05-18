@@ -1,0 +1,572 @@
+# HDGALT Implementation Plan
+
+A staged implementation plan for the `HDGALT` ArduPlane mode
+specified in `ArduPlane/mode_hdgalt.md`. Each numbered section is a
+self-contained step that produces a buildable, testable artifact.
+Steps are ordered so that each builds on the previous; do not skip
+ahead.
+
+The plan is written to be executed by a coding assistant working in
+the ardupilot tree on branch `hdgaltmode`. Read the design document
+(`ArduPlane/mode_hdgalt.md`) before starting any step; it is the
+authoritative specification. This plan is the *order of operations*,
+not the spec.
+
+---
+
+## Working assumptions
+
+- Branch: `hdgaltmode`, off `master`.
+- Build target: SITL (`./waf configure --board sitl && ./waf plane`).
+- Test harness: ArduPilot's own `Tools/autotest/` framework. The
+  external `ardusitl` harness is irrelevant for upstream contribution;
+  rely on the official tests.
+- Style: follow ArduPlane conventions everywhere. Match existing
+  mode files for formatting, naming, indentation, brace style.
+  When in doubt, mimic `mode_cruise.cpp` and `mode_cruise.h` — they
+  are the closest existing mode in spirit to HDGALT.
+- Commit cadence: each numbered step is one commit (or a small
+  series). The branch should remain buildable at every commit.
+
+---
+
+## Step 1: Define the MAVLink messages
+
+Goal: nail down `HDGALT_COMMAND` and `HDGALT_STATE` as concrete
+MAVLink message definitions. Nothing else in the implementation can
+proceed without this contract.
+
+### What to do
+
+1. Create a new MAVLink dialect file. The conventional location for
+   ArduPilot-specific extensions is `modules/mavlink/message_definitions/v1.0/ardupilotmega.xml`.
+   Inspect that file to see how other ArduPilot-specific messages
+   (e.g. `RANGEFINDER`, `AHRS3`, `MEMINFO`) are declared.
+2. Add `HDGALT_COMMAND` and `HDGALT_STATE` message definitions per
+   section 5 of the design doc. Pick currently-unused message IDs
+   in the ardupilotmega range. Document each field with a one-line
+   `<description>` matching the design doc.
+3. Add `HDGALT` to the `MAV_MODE_FLAG` family if appropriate, or to
+   whatever enum ArduPlane uses for its custom modes. Look at how
+   `CRUISE` and `AUTO` are declared and follow the same pattern.
+4. Regenerate the MAVLink C headers via the standard build step
+   (the waf build will pick this up automatically, but verify by
+   building once after the XML edit).
+
+### Acceptance
+
+- `./waf plane` builds successfully.
+- The generated headers contain `mavlink_msg_hdgalt_command.h` and
+  `mavlink_msg_hdgalt_state.h`.
+- Manually inspect those generated headers: the field types and
+  ordering match the design doc.
+
+### Notes
+
+- Field widths matter for MAVLink: `float` is 4 bytes, `uint32` is
+  4 bytes, etc. The design doc's pseudo-code uses these types; the
+  XML must match.
+- `flags` is a `uint16` bitfield. Define the bit values as
+  `<entry>` elements in an enum, e.g. `HDGALT_COMMAND_FLAG_HEADING = 1`,
+  `HDGALT_COMMAND_FLAG_TURN_RATE = 2`, etc.
+- The `warnings` field in `HDGALT_STATE` is similarly a `uint16`
+  bitfield with `HDGALT_WARNING_*` entries.
+- Document the time field semantics clearly: `start_time_boot_ms`
+  is "AP-local clock, milliseconds since boot," same time-base as
+  `SYSTEM_TIME.time_boot_ms`.
+
+### Do not yet
+
+Do not write any C++ handlers for these messages. That comes in
+step 6. This step is XML-only.
+
+---
+
+## Step 2: Stub mode in ArduPlane
+
+Goal: a new `HDGALT` mode that can be selected via the mode switch
+in SITL, that does nothing yet but compiles and runs.
+
+### What to do
+
+1. Read `ArduPlane/mode.h`, `ArduPlane/mode.cpp`, and the
+   `mode_cruise.h` / `mode_cruise.cpp` pair to understand the
+   `Mode` class hierarchy and conventions.
+2. Create `ArduPlane/mode_hdgalt.h` declaring a `ModeHdgAlt` class
+   inheriting from `Mode`. Override:
+   - `number()` returning `Number::HDGALT` (you'll add this enum
+     value too).
+   - `name()` returning `"HDGALT"`.
+   - `name4()` returning `"HDGA"`.
+   - `_enter()`, `_exit()`, `update()` (empty for now).
+   - `requires_GPS()` returning `false`.
+   - `allows_arming(AP_Arming::Method)` returning `false`.
+   - `is_landing()` returning `false`.
+3. Add `HDGALT` as a new enum value in `Mode::Number`. Pick the
+   next unused integer.
+4. Create `ArduPlane/mode_hdgalt.cpp` with skeleton implementations
+   of all overridden methods. Most are no-ops; `update()` is
+   empty.
+5. Register the mode in ArduPlane's mode factory. This is typically
+   in `mode.cpp`'s `Plane::mode_from_mode_num()` function — add a
+   case for `Number::HDGALT` returning a pointer to the new mode
+   instance.
+6. Add the new mode instance as a member of `Plane` class. Find
+   where other modes are declared (likely in `Plane.h` or
+   `mode.cpp`) and add `ModeHdgAlt mode_hdgalt;` to the list.
+7. Add `mode_hdgalt.cpp` to the build by listing it in
+   `ArduPlane/wscript` (or whatever ArduPlane's build manifest is).
+
+### Acceptance
+
+- `./waf plane` builds successfully.
+- Launch SITL: `Tools/autotest/sim_vehicle.py -v ArduPlane --console --map`.
+- At the MAVProxy prompt, type `mode HDGALT`. The mode should
+  switch and `mode` should report `HDGALT`. The plane will not
+  fly correctly (the mode does nothing), but the mode should be
+  selectable and not crash.
+- `arm throttle` should be refused with a sensible message
+  (because `allows_arming() = false`).
+
+### Notes
+
+- ArduPlane has many existing modes; expect the stub to require
+  edits in 4-6 different files. The mode-registration pattern is
+  not pretty but is consistent across modes.
+- Some ArduPlane modes use `init()` instead of `_enter()`. Check
+  the base class current API. Use whatever the existing modes use.
+
+### Do not yet
+
+Do not implement any control logic. The mode is intentionally inert.
+
+---
+
+## Step 3: Lateral controller — heading hold
+
+Goal: a working heading PID + bank limit + stall-margin clip, such
+that engaging HDGALT in SITL holds the heading at engagement.
+
+### What to do
+
+1. In `mode_hdgalt.h`, declare:
+   - Private member: `float heading_cmd_deg` — the heading setpoint.
+   - Private member: `AC_PID heading_pid` — the PID controller. (Or
+     whichever PID class ArduPlane uses; check what `mode_cruise.cpp`
+     uses for similar purposes.)
+   - Private method: `float compute_bank_command()`.
+2. In `_enter()`: snapshot the current heading from `ahrs.yaw`
+   (converted from radians to degrees and wrapped to 0–360) into
+   `heading_cmd_deg`. Reset the PID's integral state.
+3. In `update()`:
+   - Compute heading error: `wrap_180(heading_cmd_deg - current_heading_deg)`.
+   - Run the PID on heading error to get a bank command.
+   - Clip by bank limit and stall-margin limit (see section 3.3 of
+     the design doc).
+   - Pass the clipped bank command to the existing roll attitude
+     controller. The call pattern depends on ArduPlane internals;
+     look at how `mode_cruise.cpp` commands roll for the right API.
+   - For now, vertical: just call whatever existing function `mode_cruise`
+     calls to hold pitch level. This is a placeholder until step 4.
+4. Add parameters for the lateral controller:
+   - `HDGALT_BANK_MAX` (float, default 25.0, units degrees).
+   - `HDGALT_STALL_MARGIN` (float, default 1.3, no units).
+   - `HDGALT_AIRSPEED_MIN` (float, default value airframe-specific
+     — set 10.0 m/s as a placeholder, with a comment noting this
+     should be tuned).
+   - Heading PID gains: typically a struct of params, follow how
+     other modes declare their PID params. ArduPlane convention
+     uses `AP_PARAM_FRAME_PLANE` for plane-only params.
+5. Implement `compute_bank_command()` per the design doc's section
+   3.3. The math:
+   ```
+   bank_request = PID(heading_error)
+   bank_max = HDGALT_BANK_MAX
+   ratio = HDGALT_AIRSPEED_MIN * HDGALT_STALL_MARGIN / current_airspeed
+   if ratio >= 1.0: bank_stall_max = 0
+   else: bank_stall_max = degrees(acos(ratio * ratio))
+   bank_limit = min(bank_max, bank_stall_max)
+   return constrain(bank_request, -bank_limit, +bank_limit)
+   ```
+
+### Acceptance
+
+- `./waf plane` builds.
+- In SITL, take off in MANUAL, fly to ~100m altitude and trim for
+  cruise, then `mode HDGALT`. The plane should hold its heading.
+- Push the simulated stick to one side: HDGALT should *not* respond
+  to stick input yet (that's step 8). The plane will fight you.
+  This is fine for now; just verify heading is maintained when no
+  stick input is given.
+- Inspect the BIN log: roll attitude commands from the PID should
+  appear in `ATT` or similar message; the bank should stay below
+  `HDGALT_BANK_MAX`.
+
+### Notes
+
+- Heading from `ahrs.yaw` is in radians, range `[-π, π]`. Convert
+  to degrees and to the 0–360 range conventionally used for
+  magnetic headings.
+- The wrap function for heading error must handle the wrap-around:
+  going from 350° to 10° is a +20° turn, not -340°. Use the
+  existing ArduPilot utility `wrap_180()` from `AP_Math/AP_Math.h`.
+- PID tuning: start with conservative gains. `kP = 0.5`, `kI = 0.05`,
+  `kD = 0.0` is a reasonable starting point for heading→bank. Tune
+  in SITL once it flies. The values will be airframe-dependent.
+
+### Do not yet
+
+Do not handle MAVLink commands. The heading remains whatever was
+snapshotted at engagement. Step 6 adds command handling.
+
+---
+
+## Step 4: Vertical passthrough to TECS
+
+Goal: pass HDGALT's altitude setpoint to TECS so the plane holds
+altitude as well as heading.
+
+### What to do
+
+1. In `mode_hdgalt.h`, add:
+   - Private member: `float altitude_cmd_m` — the altitude setpoint.
+   - Private member: `float climb_rate_cmd_mps` — the climb rate cap.
+2. In `_enter()`: snapshot the current altitude (use baro altitude,
+   `AP::baro().get_altitude()`) into `altitude_cmd_m`. Set
+   `climb_rate_cmd_mps` from `HDGALT_CLIMB_RATE_DEFAULT`.
+3. In `update()`, replace the placeholder vertical call with TECS
+   commands. Look at `mode_cruise.cpp` to see how it interacts with
+   TECS — typically through `plane.calc_throttle()` and
+   `plane.calc_nav_pitch()` or via direct TECS API calls.
+4. Set TECS targets:
+   - Altitude: `tecs->set_altitude_target_m(altitude_cmd_m)` (verify
+     the exact API name; ArduPlane's TECS has historically named
+     these things variously).
+   - Climb rate cap: pass `climb_rate_cmd_mps` to whatever TECS
+     method controls maximum climb rate.
+5. Add parameters:
+   - `HDGALT_CLIMB_RATE_DEFAULT` (float, default 2.0, units m/s).
+   - `HDGALT_PITCH_MAX` (float, default 10.0, units degrees) —
+     passed to TECS as pitch limit.
+
+### Acceptance
+
+- Build and SITL test as in step 3.
+- After takeoff, climbing to cruise altitude in MANUAL, then engaging
+  HDGALT: the plane should hold both heading and altitude.
+- In MAVProxy, observe altitude via `status`: should remain within
+  ±5m of the engagement altitude over a 1-minute hold (depending
+  on TECS tuning).
+
+### Notes
+
+- TECS is well-tuned in stock ArduPlane. You should not need to
+  modify its gains; HDGALT just feeds it targets.
+- If altitude drifts more than expected, the likely cause is that
+  the wrong TECS API is being called. Diff against `mode_cruise`
+  carefully; CRUISE holds altitude similarly and is a good
+  reference.
+- Climb-failure detection (the latched failsafe per section 6.4)
+  is **not** in this step. That comes in step 5 once we know how
+  TECS exposes saturation.
+
+---
+
+## Step 5: Climb-failure detection
+
+Goal: detect when TECS can't reach the commanded altitude and latch
+the failsafe.
+
+### What to do
+
+1. Examine TECS's interface for saturation/achievability signals.
+   Likely candidates:
+   - A method like `tecs->is_underspeed()` or similar that
+     indicates the airplane is at its limits.
+   - A way to read the demanded throttle and check if it's at max.
+   - Altitude error history.
+2. Add private state to `ModeHdgAlt`:
+   - `bool climb_failed_latched`
+   - `uint32_t climb_fail_start_ms` — when the saturation condition
+     started.
+3. In `update()`:
+   - Compute altitude error: `altitude_cmd_m - current_altitude`.
+   - If `abs(error) > deadband` (e.g. 5m) AND TECS is saturated
+     trying to reduce the error:
+     - If `climb_fail_start_ms` is 0 (not currently in the
+       saturated state): set it to `millis()`.
+     - Else if `millis() - climb_fail_start_ms > HDGALT_CLIMB_FAIL_TIMEOUT * 1000`:
+       latch the failsafe.
+   - Else (error within deadband, or TECS not saturated): reset
+     `climb_fail_start_ms = 0`.
+4. When the failsafe latches:
+   - Clip `altitude_cmd_m` to current altitude.
+   - Set the `HDGALT_WARNING_CLIMB_UNACHIEVABLE` bit (you'll have a
+     `warnings` member by step 7; for now, use a bool and emit
+     STATUSTEXT now).
+   - Emit one STATUSTEXT at `MAV_SEVERITY_WARNING`: "HDGALT: climb
+     unachievable, holding altitude".
+5. When a new HDGALT_COMMAND arrives (step 6) and updates
+   `altitude_cmd_m`, clear `climb_failed_latched` and
+   `climb_fail_start_ms`. (Add a TODO comment for now; wire it up
+   in step 6.)
+6. Add parameter:
+   - `HDGALT_CLIMB_FAIL_TIMEOUT` (float, default 10.0, units s).
+
+### Acceptance
+
+- Build and SITL test.
+- Reduce throttle in SITL (via MAVProxy: `param set TRIM_THROTTLE 30`
+  or similar) so the airplane can't climb. Engage HDGALT and set a
+  high altitude target manually (you can do this temporarily by
+  editing `altitude_cmd_m` in `_enter()` for testing).
+- Observe: after `HDGALT_CLIMB_FAIL_TIMEOUT` seconds, the
+  STATUSTEXT appears and altitude is clipped.
+
+### Notes
+
+- TECS's exact API for "I'm saturated" varies by ArduPlane version.
+  Read the current `AP_TECS.h` and `AP_TECS.cpp` carefully. If no
+  clean API exists, you may need to add one — that's a small
+  upstream-friendly change.
+- Be careful with the deadband: too small and normal altitude
+  oscillation triggers the failsafe; too large and real failures
+  go undetected. 5m is a reasonable starting point for a fixed-wing.
+
+---
+
+## Step 6: MAVLink command handling
+
+Goal: process incoming `HDGALT_COMMAND` messages, update setpoints,
+handle the single-slot future queue.
+
+### What to do
+
+1. In `GCS_Mavlink_Plane.cpp` (or wherever incoming MAVLink messages
+   are routed), add a case for `MAVLINK_MSG_ID_HDGALT_COMMAND`.
+   Route to `plane.mode_hdgalt.handle_HDGALT_COMMAND(msg)`.
+2. Implement `ModeHdgAlt::handle_HDGALT_COMMAND(const mavlink_message_t &msg)`:
+   - Decode the message into a `mavlink_hdgalt_command_t` struct.
+   - If `start_time_boot_ms == 0`: apply immediately. Update
+     `heading_cmd_deg`, `altitude_cmd_m`, etc. from the message
+     fields, respecting the flags bitfield.
+   - If `start_time_boot_ms > current AP_HAL::millis()`: store the
+     command in a pending-command slot. Any previously-pending
+     command is overwritten.
+   - If `start_time_boot_ms` is in the past: apply immediately and
+     log a warning that the command was late.
+3. Add private state:
+   - A pending-command struct with the same fields as the message
+     plus a `valid` flag.
+4. In `update()`:
+   - At the top of the tick, check the pending command. If valid
+     and its start time has been reached: apply it, clear the
+     valid flag.
+5. When `heading_cmd_deg`, `altitude_cmd_m`, or `climb_rate_cmd_mps`
+   is updated by a command: reset any active failsafe latches
+   (from step 5).
+6. Respect the flags bitfield: if `HDGALT_COMMAND_FLAG_HEADING` is
+   not set in the message's `flags`, leave `heading_cmd_deg`
+   unchanged. Same for the other axes.
+
+### Acceptance
+
+- Build.
+- In SITL, take off and engage HDGALT manually.
+- From MAVProxy, send a HDGALT_COMMAND with the heading set to
+  current+90 and immediate execution:
+  ```
+  long HDGALT_COMMAND <fields...>
+  ```
+  (MAVProxy syntax for sending arbitrary commands.)
+- Observe: the plane turns 90° to the new heading.
+- Send another with `start_time_boot_ms = current + 10000` (10
+  seconds in the future): the command should queue, and after 10
+  seconds the new turn should begin.
+
+### Notes
+
+- The MAVLink command-sending from MAVProxy is awkward. You may
+  find it easier to write a tiny Python script using `pymavlink`
+  to send well-formed HDGALT_COMMANDs for testing. Don't formalize
+  this; it's just a test scaffold.
+- Logging: emit a brief `AP_Logger` entry every time a HDGALT_COMMAND
+  arrives. This shows up in the BIN log for post-flight analysis.
+
+---
+
+## Step 7: HDGALT_STATE emission
+
+Goal: periodically emit `HDGALT_STATE` so the FD (or a GCS) can see
+what the AP is doing.
+
+### What to do
+
+1. Read how other modes emit periodic MAVLink messages. The pattern
+   is usually a `stream_*` function in `GCS_Mavlink_Plane.cpp` or
+   a periodic call from `update()`.
+2. Implement `ModeHdgAlt::send_state(mavlink_channel_t chan)`:
+   - Fill a `mavlink_hdgalt_state_t` struct from current mode state.
+   - `_target` fields are the setpoints, `_current` fields are
+     measured values, `_actual` fields are what the AP is doing
+     (e.g., `turn_rate_actual` is current yaw rate; `climb_rate_actual`
+     is current vertical speed from baro derivative).
+   - `capture_state` reflects whether the plane is in hold (errors
+     small) or capture (errors large) on each axis.
+   - `warnings` is the failsafe bits.
+3. Schedule the state message at 1 Hz minimum. Look at how
+   `GLOBAL_POSITION_INT` is scheduled and follow the same pattern.
+
+### Acceptance
+
+- Build.
+- In SITL with HDGALT engaged, send HDGALT_COMMANDs and observe
+  HDGALT_STATE messages flowing back.
+- Specifically test the `_actual` vs `_target` divergence cases:
+  command a turn rate above what bank/stall limits allow, and
+  verify that `turn_rate_actual < turn_rate_commanded` and the
+  `HDGALT_WARNING_TURN_DERATED` bit is set.
+
+### Notes
+
+- ArduPlane has facilities for scheduling MAVLink streams at
+  configurable rates. Default 1 Hz; tunable via `SR0_*` parameters.
+
+---
+
+## Step 8: Pilot override
+
+Goal: detect any meaningful pilot stick input and disengage HDGALT,
+switching to FBWA (or `HDGALT_DISENGAGE_MODE`).
+
+### What to do
+
+1. Add parameters:
+   - `HDGALT_PILOT_THRESHOLD` (float, default 0.10, no units —
+     fraction of stick throw).
+   - `HDGALT_DISENGAGE_MODE` (int, default to the int value for
+     FBWA mode).
+2. In `update()`, at the top:
+   - Read pilot roll input from the appropriate RC channel
+     (`channel_roll->get_control_in()` or similar — examine
+     `mode_fbwa.cpp` for the right call).
+   - Read pilot pitch input.
+   - Read pilot throttle position. Compare to TECS-commanded
+     throttle: `abs(pilot_throttle - tecs_commanded_throttle) > threshold`.
+   - If *any* of these exceed `HDGALT_PILOT_THRESHOLD` (expressed
+     as a fraction of stick travel, so e.g. 100 in raw units of
+     ±500 if that's the convention):
+     - Log a STATUSTEXT: "HDGALT: pilot override".
+     - Call `plane.set_mode(...)` to switch to
+       `HDGALT_DISENGAGE_MODE`.
+     - Return from `update()` without doing further control work.
+3. Yaw (rudder) is **not** an override trigger. Document this with
+   a comment.
+4. The deadband applies *each tick* — if the stick is in the
+   deadband, no disengage. If it leaves the deadband for one tick,
+   disengage immediately. No debounce.
+
+### Acceptance
+
+- Build.
+- In SITL, take off, engage HDGALT, then nudge roll stick slightly.
+- The mode should switch to FBWA on the first tick where stick
+  position exceeds threshold.
+- Re-engaging HDGALT via `mode HDGALT` should work and snapshot the
+  new state.
+
+### Notes
+
+- Threshold in raw stick units depends on RC channel conventions.
+  If the channel's full deflection is ±500, then a 10% threshold
+  is 50 units. Look at how `mode_fbwa` handles raw stick input
+  for the conversion.
+- The throttle comparison is the tricky one. TECS commands
+  throttle as a value 0–100 (or 0–1). The pilot's throttle stick is
+  in raw RC units. The comparison must be against equivalent units;
+  normalize to fraction of full range on both sides.
+
+---
+
+## Step 9: Integration test in `Tools/autotest/`
+
+Goal: an automated test that verifies HDGALT works end-to-end, run
+as part of ArduPilot's standard test suite.
+
+### What to do
+
+1. Examine `Tools/autotest/arduplane.py` to understand how plane
+   mode tests are structured. Each test is typically a method on
+   the `AutoTestPlane` class.
+2. Add a method `test_hdgalt(self)`:
+   - Take off in MANUAL, climb to 100m, trim for cruise.
+   - Switch to HDGALT.
+   - Verify that heading and altitude are held within tolerance
+     for 10 seconds (use the autopilot's reported `VFR_HUD` data
+     against the snapshot at engagement).
+   - Send a HDGALT_COMMAND with a new heading 90° to the right.
+     Verify that the plane turns and stabilizes on the new heading
+     within a reasonable time and tolerance.
+   - Send a HDGALT_COMMAND with a new altitude 50m higher. Verify
+     climb to new altitude.
+   - Simulate a pilot stick input via `MANUAL_CONTROL`. Verify that
+     mode switches to FBWA.
+3. Register the test in the test framework so it's part of the
+   default `arduplane` test run.
+
+### Acceptance
+
+- `Tools/autotest/autotest.py build.Plane test.Plane` runs the
+  full plane test suite, and the new HDGALT test passes.
+- The test catches regressions: temporarily break the heading PID
+  and verify the test fails.
+
+### Notes
+
+- `Tools/autotest/` tests are slow (each runs a SITL flight). Keep
+  the HDGALT test under ~2 minutes of sim time at default speedup.
+- The test's tolerances should be lenient (e.g., ±10° heading
+  hold, ±10m altitude hold) to avoid flakiness. Tight tolerances
+  belong in flight tests, not regression tests.
+
+---
+
+## After step 9
+
+The mode is functionally complete and tested. From here:
+
+- Run the test suite a few times to catch any flakiness.
+- Tune PID gains and parameter defaults for one or two known
+  airframes (the default SITL plane is fine to start).
+- Update `ArduPlane/mode_hdgalt.md` to reflect any spec changes
+  that happened during implementation.
+- Open the upstream PR. Reference the design doc, the test, and
+  any Discord/Discourse discussion thread.
+
+The reference flight director (separate repo) is a follow-on
+project. Build it once HDGALT is merged or at least stable.
+
+---
+
+## General guidance for the coding assistant
+
+- **Read before writing.** Each step references existing ArduPlane
+  files as templates. Read them first. Match their style and
+  patterns exactly. ArduPlane's reviewers will reject style
+  divergence even if the code is correct.
+- **Commit often.** Each step is one or a few commits. Each commit
+  should be buildable and tested at least to the "it doesn't crash
+  SITL on engagement" level.
+- **Keep the design doc honest.** If you change something during
+  implementation (a parameter name, a default value, a control flow
+  detail), update `mode_hdgalt.md` in the same commit. The doc and
+  the code must agree at every commit.
+- **Don't over-engineer.** The design doc is deliberately minimal.
+  If a piece of code doesn't have a corresponding design-doc
+  justification, question whether it should exist. Resist the urge
+  to add features.
+- **When uncertain about ArduPlane conventions, ask.** Don't guess.
+  The repo is large and has many internal conventions that aren't
+  obvious from a single file. If something seems ambiguous, leave
+  a `TODO(hdgalt)` comment and surface the question rather than
+  silently picking one option.
