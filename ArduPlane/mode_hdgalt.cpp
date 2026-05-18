@@ -113,6 +113,8 @@ bool ModeHdgAlt::_enter()
 
     climb_failed_latched = false;
     climb_fail_start_ms = 0;
+    turn_derated = false;
+    last_state_ms = 0;
 
     // initialise the shared target-altitude struct (slope offset,
     // terrain flags) consistently. HDGALT is barometric MSL only
@@ -231,6 +233,10 @@ float ModeHdgAlt::compute_bank_command_cd(float heading_error_rad, float dt)
     const float bank_limit_cd = MIN(bank_limit_deg * 100.0f,
                                     (float)plane.roll_limit_cd);
 
+    // Derated if the PID wanted more bank than the active limit
+    // allows: the achieved turn rate is then below the commanded one.
+    turn_derated = fabsf(bank_request_cd) > bank_limit_cd;
+
     return constrain_float(bank_request_cd, -bank_limit_cd, bank_limit_cd);
 }
 
@@ -307,6 +313,67 @@ void ModeHdgAlt::update()
     // non-stick-mixing path
     plane.calc_nav_pitch();
     plane.calc_throttle();
+
+    // --- periodic HDGALT_STATE (design doc 5.2): 1 Hz ---
+    if (now - last_state_ms >= 1000) {
+        last_state_ms = now;
+        send_hdgalt_state();
+    }
+}
+
+// Fill and broadcast HDGALT_STATE to all active GCS channels. The
+// _target fields are setpoints, _current are measured, _actual are
+// what the AP is achieving (so the FD can see clipping/derating).
+void ModeHdgAlt::send_hdgalt_state()
+{
+    const float heading_now = wrap_360(degrees(plane.ahrs.get_yaw_rad()));
+    const float alt_now_m = plane.current_loc.alt * 0.01f;
+
+    // capture vs hold per axis (same deadbands the controllers use)
+    const float hdg_err = fabsf(wrap_180(heading_cmd_deg - heading_now));
+    const float alt_err = fabsf(altitude_cmd_m - alt_now_m);
+    const bool cap_lat = hdg_err > 5.0f;
+    const bool cap_vert = alt_err > 5.0f;
+    uint8_t capture_state = HDGALT_CAPTURE_HOLD;
+    if (cap_lat && cap_vert) {
+        capture_state = HDGALT_CAPTURE_BOTH;
+    } else if (cap_lat) {
+        capture_state = HDGALT_CAPTURE_LATERAL;
+    } else if (cap_vert) {
+        capture_state = HDGALT_CAPTURE_VERTICAL;
+    }
+
+    uint16_t warnings = 0;
+    if (climb_failed_latched) {
+        warnings |= HDGALT_WARNING_CLIMB_UNACHIEVABLE;
+    }
+    if (turn_derated) {
+        warnings |= HDGALT_WARNING_TURN_DERATED;
+    }
+    // approaching the protective airspeed floor (disengage in 6.5)
+    if (plane.smoothed_airspeed < airspeed_min * 1.15f) {
+        warnings |= HDGALT_WARNING_AIRSPEED_LOW;
+    }
+
+    mavlink_hdgalt_state_t packet{};
+    packet.time_boot_ms = AP_HAL::millis();
+    packet.flags = HDGALT_STATE_FLAG_HEADING_ACTIVE |
+                   HDGALT_STATE_FLAG_ALTITUDE_ACTIVE;
+    packet.queued_start_time_ms = pending.valid ? pending.start_ms : 0;
+    packet.heading_target = heading_cmd_deg;
+    packet.heading_current = heading_now;
+    packet.turn_rate_commanded = turn_rate_cmd_dps;
+    packet.turn_rate_actual = degrees(plane.ahrs.get_yaw_rate_earth());
+    packet.altitude_target = altitude_cmd_m;
+    packet.altitude_current = alt_now_m;
+    packet.climb_rate_commanded = climb_rate_cmd_mps;
+    packet.climb_rate_actual = plane.barometer.get_climb_rate();
+    packet.airspeed_current = plane.smoothed_airspeed;
+    packet.capture_state = capture_state;
+    packet.warnings = warnings;
+
+    gcs().send_to_active_channels(MAVLINK_MSG_ID_HDGALT_STATE,
+                                  (const char *)&packet);
 }
 
 #endif // MODE_HDGALT_ENABLED

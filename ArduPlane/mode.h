@@ -1073,6 +1073,10 @@ public:
                                float heading_deg, float turn_rate_dps,
                                float altitude_m, float climb_rate_mps);
 
+    // emit HDGALT_STATE to all active GCS channels (rate-limited;
+    // called from update()). Design doc 5.2.
+    void send_hdgalt_state();
+
     // vertical is handled via TECS (placeholder in step 3, explicit
     // altitude target in step 4); let the auto-throttle path run.
     bool does_auto_throttle() const override { return true; }
@@ -1152,6 +1156,13 @@ private:
     // new HDGALT_COMMAND (wired in step 6).
     bool climb_failed_latched;
     uint32_t climb_fail_start_ms;
+
+    // true when the last bank command was clipped by the bank /
+    // stall-margin / turn-rate limit (HDGALT_WARNING_TURN_DERATED)
+    bool turn_derated;
+
+    // HDGALT_STATE emission rate limiting
+    uint32_t last_state_ms;
 
     // dt bookkeeping for the heading PID
     uint32_t last_update_ms;

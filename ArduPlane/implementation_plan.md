@@ -483,7 +483,18 @@ handle the single-slot future queue.
 
 ## Step 7: HDGALT_STATE emission
 
-**Status: NOT STARTED.**
+**Status: DONE** — acceptance met and agreed (committed with this
+note). `ModeHdgAlt::send_hdgalt_state()` fills `mavlink_hdgalt_state_t`
+and broadcasts via `gcs().send_to_active_channels()` (AP_Button /
+AP_Avoidance pattern — no library-side SRx/ap_message entry needed),
+rate-limited to 1 Hz from `update()`. `_actual` fields:
+`ahrs.get_yaw_rate_earth()`, `barometer.get_climb_rate()` (both
+GPS-free); `capture_state` from 5°/5 m thresholds; warnings =
+CLIMB_UNACHIEVABLE / TURN_DERATED / AIRSPEED_LOW. SITL: streamed at
+1.00 s intervals with sane fields; commanding turn_rate 30 deg/s
+(unachievable) gave turn_rate_actual ~11.9 < commanded 30 with
+HDGALT_WARNING_TURN_DERATED set. Both MODE_HDGALT_ENABLED builds
+compile. Design doc §5.2/§8.4 updated.
 
 Goal: periodically emit `HDGALT_STATE` so the FD (or a GCS) can see
 what the AP is doing.

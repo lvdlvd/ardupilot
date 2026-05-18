@@ -437,7 +437,19 @@ executes immediately and clears any queued command.
 
 ### 5.2 HDGALT_STATE (AP → FD, periodic)
 
-Emitted at 1 Hz minimum while HDGALT is engaged.
+Emitted at 1 Hz while HDGALT is engaged (rate-limited from
+`update()`; design's "1 Hz minimum"). As implemented:
+`time_boot_ms`=AP millis; `flags`=HEADING_ACTIVE|ALTITUDE_ACTIVE
+(both axes always active in HDGALT); `queued_start_time_ms`=
+`pending.start_ms` or 0; `*_target`=setpoints (`heading_cmd_deg`,
+`altitude_cmd_m`); `*_current`=measured (`ahrs` yaw,
+`current_loc.alt`); `turn_rate_actual`=`ahrs.get_yaw_rate_earth()`,
+`climb_rate_actual`=`barometer.get_climb_rate()` (both GPS-free);
+`airspeed_current`=`smoothed_airspeed`; `capture_state` from per-axis
+5° / 5 m error thresholds; `warnings`=CLIMB_UNACHIEVABLE (latched),
+TURN_DERATED (bank/stall/turn-rate clip active), AIRSPEED_LOW
+(airspeed < `HDGALT_ASPD_MIN` × 1.15, i.e. approaching the §6.5
+disengage floor).
 
 ```
 message HDGALT_STATE
@@ -820,8 +832,12 @@ implemented in step 6:
   climb-unachievable latch (design §3.4/§6.4) — wiring the hook
   step 5 left.
 
-HDGALT_STATE is emitted by the mode at the configured stream rate
-(step 7).
+HDGALT_STATE is broadcast from `ModeHdgAlt::send_hdgalt_state()` via
+`gcs().send_to_active_channels(MAVLINK_MSG_ID_HDGALT_STATE, ...)`
+(the same lightweight pattern `AP_Button`/`AP_Avoidance` use for
+ardupilotmega messages), rate-limited to 1 Hz in `update()`. This
+avoids adding a library-side `ap_message`/SRx stream entry for a
+mode-only message; it is sent only while HDGALT is the active mode.
 
 ### 8.5 Parameters
 
