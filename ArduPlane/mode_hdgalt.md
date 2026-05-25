@@ -403,14 +403,21 @@ drops below this, the AP disengages with a STATUSTEXT warning.
 
 ## 5. MAVLink interface
 
-Two new messages, defined in the ArduPilot dialect
-`modules/mavlink/message_definitions/v1.0/ardupilotmega.xml`
-(proposed for upstream common.xml after stabilization).
+Two new messages, defined in the in-development dialect
+`modules/mavlink/message_definitions/v1.0/hdgalt_dev.xml`, which is
+pulled into the ArduPilot dialect by a single `<include>` line in
+`ardupilotmega.xml` (proposed for upstream common.xml after
+stabilization). Keeping them in their own leaf file isolates the
+experimental definitions and makes the feature revertible by removing
+that include and deleting `hdgalt_dev.xml`.
 
 As implemented:
 
-- `HDGALT_COMMAND` is message ID **11061**.
-- `HDGALT_STATE` is message ID **11062**.
+- `HDGALT_COMMAND` is message ID **52100**.
+- `HDGALT_STATE` is message ID **52101**.
+  (Experimental 52100-52199 range, clear of the AIRLINK pair at
+  52000/52001; renumbered from the original 11061/11062 when the
+  definitions moved to `hdgalt_dev.xml`.)
 - `PLANE_MODE_HDGALT = 27` is added to the `PLANE_MODE` enum (the
   next free value after `PLANE_MODE_AUTOLAND = 26`); this matches
   `Mode::Number::HDGALT` on the ArduPlane side.
@@ -939,8 +946,8 @@ Regression sensitivity was verified by temporarily zeroing the
 heading PID gain: the test then fails as expected.
 
 **pymavlink note:** `HDGALT_COMMAND`/`HDGALT_STATE` are new
-ardupilotmega messages, so the test requires a pymavlink generated
-from the updated `ardupilotmega.xml`. Upstream this accompanies the
+messages carried in `hdgalt_dev.xml` (included by `ardupilotmega.xml`),
+so the test requires a pymavlink generated from that dialect. Upstream this accompanies the
 mavlink-submodule PR and the standard pymavlink install; locally,
 regenerate the (gitignored, build-artifact) dialect and run with
 the in-tree pymavlink, e.g. `PYTHONPATH=modules/mavlink`. HDGALT
