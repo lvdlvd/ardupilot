@@ -425,20 +425,29 @@ int strcmp(const char *s1, const char *s2)
     return (*s1 - *s2);
 }
 
-//simple variant of std c function to reduce used flash space
+//simple variant of std c function to reduce used flash space.
+// The empty asm in the loop stops the compiler's loop-idiom recognition
+// from turning the body into a call to strlen — i.e. to itself, an
+// infinite loop (observed with gcc 15: 'strlen: b.w strlen').
 size_t strlen(const char *s1)
 {
     size_t ret = 0;
-    while (*s1++) ret++;
+    while (*s1++) {
+        ret++;
+        __asm__ volatile("");
+    }
     return ret;
 }
 
 //simple variant of std c function to reduce used flash space
+// (same idiom-recognition guard as strlen: gcc can turn this loop
+// into a call to memset)
 void *memset(void *s, int c, size_t n)
 {
     uint8_t *b = (uint8_t *)s;
     while (n--) {
         *b++ = c;
+        __asm__ volatile("");
     }
     return s;
 }
