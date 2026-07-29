@@ -1247,8 +1247,7 @@ void NavEKF3_core::alignMagStateDeclination()
         // zero the corresponding state covariances if magnetic field state learning is active
         ftype var_16 = P[16][16];
         ftype var_17 = P[17][17];
-        zeroRows(P,16,17);
-        zeroCols(P,16,17);
+        zeroStatesVarCov(16, 17);
         P[16][16] = var_16;
         P[17][17] = var_17;
 
@@ -1443,8 +1442,6 @@ void NavEKF3_core::resetQuatStateYawOnly(ftype yaw, ftype yawVariance, rotationO
     // Update the rotation matrix
     stateStruct.quat.inverse().rotation_matrix(prevTnb);
     
-    ftype deltaYaw = wrap_PI(yaw - eulerAngles.z);
-
     // calculate the change in the quaternion state and apply it to the output history buffer
     QuaternionF quat_delta = stateStruct.quat / quatBeforeReset;
     StoreQuatRotate(quat_delta);
@@ -1454,8 +1451,7 @@ void NavEKF3_core::resetQuatStateYawOnly(ftype yaw, ftype yawVariance, rotationO
     CovariancePrediction(&angleErrVarVec);
 
     // record the yaw reset event
-    yawResetAngle += deltaYaw;
-    lastYawReset_ms = imuSampleTime_ms;
+    yawResetCount++;
 
     // record the yaw reset event
     recordYawResetsCompleted();

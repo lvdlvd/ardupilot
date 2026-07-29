@@ -401,7 +401,7 @@ public:
     // Fly-by-wire
     //
     AP_Int8 flybywire_elev_reverse;
-    AP_Int8 flybywire_climb_rate;
+    AP_Float flybywire_climb_rate;
 
     // Throttle
     //
