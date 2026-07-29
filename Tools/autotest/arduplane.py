@@ -2230,7 +2230,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
         self.takeoff(alt=100, mode="TAKEOFF", timeout=120)
 
         self.change_mode(HDGALT_MODE)
-        self.delay_sim_time(3)  # let it settle on the engagement snapshot
+        self.delay_sim_time(3, reason="HDGALT to settle on the engagement snapshot")
 
         # --- 1) heading + altitude hold ---
         hdg0 = self.get_heading()
