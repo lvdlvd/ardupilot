@@ -1,0 +1,106 @@
+# NUCLEO-F767ZI as a HITL DUT: full ArduPlane (EKF and all) with the
+# BMI088 + BMP390 + RM3100 sensor stack on one external SPI bus — wired
+# either to real sensor breakouts or to a register-level bus emulator.
+# All SPIDEVs deliberately MODE0: the real parts auto-detect the mode per
+# transaction, a hardware bus emulator cannot. Sensor bus on SPI3 and CS
+# on port D: the Nucleo's ethernet PHY owns PA1/PA2/PA7 (RMII, PHY has
+# its own crystal and drives CRS_DV) — SPI1 is unusable here.
+
+MCU STM32F7xx STM32F767xx
+
+# local bench board: spare numeric id
+APJ_BOARD_ID 1498
+
+# 8 MHz from the ST-Link MCO
+OSCILLATOR_HZ 8000000
+define STM32_HSE_BYPASS
+
+STM32_ST_USE_TIMER 5
+
+FLASH_SIZE_KB 2048
+FLASH_RESERVE_START_KB 96
+
+# parameters in flash sector 1
+define STORAGE_FLASH_PAGE 1
+define HAL_STORAGE_SIZE 32768
+
+# ---------------------- serial -------------------------
+# SERIAL0 = the Nucleo's user USB (CN13), MAVLink to the GCS
+SERIAL_ORDER OTG1 USART3 USART6 EMPTY
+
+PA11 OTG_FS_DM OTG1
+PA12 OTG_FS_DP OTG1
+
+# USART3 PD8/PD9 = the ST-Link VCP (telem2 / debug)
+PD8 USART3_TX USART3
+PD9 USART3_RX USART3
+
+# SERIAL2 = USART6 PG14/PG9 (Arduino D1/D0 on ZIO CN10): the vnav camera
+# link. Clear of the RMII PHY (PA1/PA2/PA7, PC1/PC4/PC5, PB13, PG11/PG13),
+# of SPI3 + the port-D chip selects, of the TIM3/TIM4 PWM banks and of
+# CAN1 on PD0/PD1. Runtime: SERIAL2_PROTOCOL 2 (MAVLink2), SERIAL2_BAUD 115.
+PG14 USART6_TX USART6
+PG9  USART6_RX USART6
+
+PA13 JTMS-SWDIO SWD
+PA14 JTCK-SWCLK SWD
+
+# ---------------------- sensor bus ----------------------
+# SPI3 on the Zio/morpho headers, CS on port D — clear of RMII and OTG
+PB3 SPI3_SCK SPI3
+PB4 SPI3_MISO SPI3
+PB5 SPI3_MOSI SPI3
+
+PD3 ACCEL_CS CS
+PD4 GYRO_CS CS
+PD5 BARO_CS CS
+PD6 MAG_CS CS
+
+# MODE0 everywhere (see header); gyro + mag capped at 1 MHz (RM3100 limit,
+# and the emulator's no-dummy protocol domain), accel/baro may burst faster
+SPIDEV bmi088_g SPI3 DEVID1 GYRO_CS  MODE0 1*MHZ 1*MHZ
+SPIDEV bmi088_a SPI3 DEVID2 ACCEL_CS MODE0 1*MHZ 4*MHZ
+SPIDEV bmp390   SPI3 DEVID3 BARO_CS  MODE0 1*MHZ 4*MHZ
+SPIDEV rm3100   SPI3 DEVID4 MAG_CS   MODE0 1*MHZ 1*MHZ
+
+IMU BMI088 SPI:bmi088_a SPI:bmi088_g ROTATION_NONE
+BARO BMP388 SPI:bmp390
+COMPASS RM3100 SPI:rm3100 false ROTATION_NONE
+define HAL_COMPASS_MAX_SENSORS 1
+
+define HAL_DEFAULT_INS_FAST_SAMPLE 0
+
+# ---------------------- servo PWM -----------------------
+# eight outputs for the harness's TIM2/TIM3 capture
+PC6  TIM3_CH1 TIM3 PWM(1) GPIO(50)
+PC7  TIM3_CH2 TIM3 PWM(2) GPIO(51)
+PC8  TIM3_CH3 TIM3 PWM(3) GPIO(52)
+PC9  TIM3_CH4 TIM3 PWM(4) GPIO(53)
+PD12 TIM4_CH1 TIM4 PWM(5) GPIO(54)
+PD13 TIM4_CH2 TIM4 PWM(6) GPIO(55)
+PD14 TIM4_CH3 TIM4 PWM(7) GPIO(56)
+PD15 TIM4_CH4 TIM4 PWM(8) GPIO(57)
+
+# ---------------------- misc -----------------------------
+# the Nucleo's LEDs
+PB0 LED1 OUTPUT LOW GPIO(90)
+PB7 LED2 OUTPUT LOW GPIO(91)
+define HAL_GPIO_A_LED_PIN 90
+
+# no battery monitor / no ADC on the bench
+define HAL_BATT_MONITOR_DEFAULT 0
+define HAL_USE_ADC FALSE
+define STM32_ADC_USE_ADC1 FALSE
+define HAL_DISABLE_ADC_DRIVER TRUE
+define HAL_WITH_MCU_MONITORING 0
+
+# treat as plane-first bench board
+env AUTOBUILD_TARGETS Plane
+
+# CAN1 on PD0/PD1 (Zio CN9; free of the ethernet PHY, SPI3 and the PWM
+# banks): DroneCAN GPS + airspeed from the HITL feeder (rb01tool -gps via
+# the canusb bridge). Runtime: CAN_P1_DRIVER 1, GPS_TYPE 9 (DroneCAN),
+# ARSPD_TYPE 8 (DroneCAN).
+PD0 CAN1_RX CAN1
+PD1 CAN1_TX CAN1
+define HAL_NUM_CAN_IFACES 1
